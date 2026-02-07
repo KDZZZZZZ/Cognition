@@ -1,0 +1,8 @@
+uploads/
+*.pyc
+__pycache__/
+.pytest_cache/
+.coverage
+.env
+chroma_db/
+*.db
