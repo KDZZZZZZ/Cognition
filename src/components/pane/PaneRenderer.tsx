@@ -4,7 +4,7 @@ import { Pane } from '../../types';
 import { TiptapMarkdownEditor } from '../editor/TiptapMarkdownEditor';
 import { SessionView } from '../session/SessionView';
 import { PDFViewer } from '../pdf/PDFViewer';
-import { MonacoSideBySideDiff } from '../editor/MonacoDiffEditor';
+import { RenderedDiffViewer } from '../editor/RenderedDiffViewer';
 import { usePaneStore } from '../../stores/paneStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useFileStore } from '../../stores/apiStore';
@@ -39,20 +39,22 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const [fileContent, setFileContent] = useState('');
   const [showNewTabMenu, setShowNewTabMenu] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [diffMode, setDiffMode] = useState<'split' | 'inline'>('split');
   const [currentPage, setCurrentPage] = useState(1);
   const previousContentRef = useRef<string>('');
 
   const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId);
   const { getFileContent, updateFileContent, files } = useFileStore();
-  const { getPermission, togglePermission, setPermission } = useSessionStore();
+  const { permissions: allPermissions, togglePermission, setPermission } = useSessionStore();
   const { setActiveTab, closeTab, reorderTabs, moveTabToPane, openTab, getAllOpenTabs, closePane, createPane, setTabMode } = usePaneStore();
   const { sessionId } = useChatStore();
   const { addVersion } = useVersionStore();
   const { activeDiff, clearDiff } = useDiffStore();
 
   // Get session permissions for all files
+  // Using allPermissions directly ensures reactivity when store updates
   const sessionPerms = activeTab?.type === 'session'
-    ? Object.fromEntries(files.map(f => [f.id, getPermission(activeTab.id, f.id)]))
+    ? allPermissions[activeTab.id] || {}
     : {};
 
   // Handle viewport changes for AI context
@@ -234,8 +236,8 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
 
   return (
     <div
-      className={`flex-1 min-w-[320px] max-w-full flex flex-col border-r border-gray-200 bg-white transition-all relative ${
-        isActive ? 'ring-1 ring-inset ring-blue-400 z-10' : 'opacity-95'
+      className={`flex-1 min-w-[320px] max-w-full flex flex-col border-r border-theme-border/20 bg-theme-bg transition-all relative ${
+        isActive ? 'ring-1 ring-inset ring-theme-border z-10' : 'opacity-95'
       }`}
       onClick={onActivate}
       onDragOver={(e) => {
@@ -259,7 +261,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
           </div>
         </div>
       )}
-      <div className="flex items-center h-9 bg-gray-100 border-b border-gray-200 select-none">
+      <div className="flex items-center h-9 bg-theme-bg/50 border-b border-theme-border/20 select-none">
         <div className="flex-1 flex overflow-x-auto no-scrollbar">
           {pane.tabs.map((tab, index) => {
             const isBeingDragged = draggedTabInfo?.tabId === tab.id;
@@ -278,15 +280,15 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                   e.stopPropagation();
                   setActiveTab(pane.id, tab.id);
                 }}
-                className={`group relative flex items-center gap-2 px-2 min-w-[100px] max-w-[160px] text-xs cursor-pointer border-r border-gray-200 h-full ${
+                className={`group relative flex items-center gap-2 px-2 min-w-[100px] max-w-[160px] text-xs cursor-pointer border-r border-theme-border/20 h-full transition-colors ${
                   pane.activeTabId === tab.id
-                    ? 'bg-white text-blue-600 border-t-2 border-t-blue-500 font-medium'
-                    : 'bg-gray-50 text-gray-500 hover:bg-gray-200'
-                } ${isDropTarget ? 'border-l-2 border-l-blue-400' : ''} ${
+                    ? 'bg-theme-bg text-theme-text border-t-2 border-t-theme-border font-medium'
+                    : 'bg-theme-bg/30 text-theme-text/60 hover:bg-theme-text/10'
+                } ${isDropTarget ? 'border-l-2 border-l-theme-border' : ''} ${
                   isBeingDragged ? 'opacity-40' : ''
                 }`}
               >
-                <GripVertical size={12} className="text-gray-400 cursor-grab active:cursor-grabbing flex-shrink-0" />
+                <GripVertical size={12} className="text-theme-text/30 cursor-grab active:cursor-grabbing flex-shrink-0" />
                 <FileIcon type={tab.type} />
                 <span className="truncate flex-1">{tab.name}</span>
                 <button
@@ -294,7 +296,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                     e.stopPropagation();
                     closeTab(pane.id, tab.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 hover:bg-gray-300 rounded p-0.5 transition-opacity flex-shrink-0"
+                  className="opacity-0 group-hover:opacity-100 hover:bg-theme-text/20 rounded p-0.5 transition-opacity flex-shrink-0"
                 >
                   <X size={12} />
                 </button>
@@ -309,7 +311,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             e.stopPropagation();
             createPane();
           }}
-          className="w-8 h-8 flex items-center justify-center hover:bg-gray-200 text-gray-500 transition-colors"
+          className="w-8 h-8 flex items-center justify-center hover:bg-theme-text/10 text-theme-text/60 transition-colors"
           title="Split Pane"
         >
           <Split size={14} />
@@ -319,7 +321,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
         <div className="relative">
           <button
             onClick={() => setShowNewTabMenu(!showNewTabMenu)}
-            className="w-8 h-8 flex items-center justify-center hover:bg-gray-200 text-gray-500 transition-colors"
+            className="w-8 h-8 flex items-center justify-center hover:bg-theme-text/10 text-theme-text/60 transition-colors"
             title="New Tab"
           >
             <Plus size={14} />
@@ -332,18 +334,18 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 className="fixed inset-0 z-40"
                 onClick={() => setShowNewTabMenu(false)}
               />
-              <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px]">
+              <div className="absolute right-0 top-full mt-1 z-50 bg-theme-bg border border-theme-border/20 rounded-lg shadow-lg py-1 min-w-[140px]">
                 <button
                   onClick={handleCreateNewMarkdown}
                   disabled={isCreating}
-                  className="w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-gray-100 transition-colors"
+                  className="w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-theme-text/10 text-theme-text/80 transition-colors"
                 >
                   <FileText size={14} />
                   {isCreating ? 'Creating...' : 'New Markdown'}
                 </button>
                 <button
                   onClick={handleStartChat}
-                  className="w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-gray-100 transition-colors"
+                  className="w-full px-3 py-2 text-left text-xs flex items-center gap-2 hover:bg-theme-text/10 text-theme-text/80 transition-colors"
                 >
                   <MessageSquare size={14} />
                   New Chat
@@ -358,16 +360,16 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             e.stopPropagation();
             closePane(pane.id);
           }}
-          className="w-8 flex items-center justify-center hover:bg-red-50 hover:text-red-600 text-gray-400 h-full border-l border-gray-200"
+          className="w-8 flex items-center justify-center hover:bg-red-50 hover:text-red-600 text-theme-text/40 h-full border-l border-theme-border/20"
         >
           <X size={14} />
         </button>
       </div>
-      <div className="flex-1 overflow-hidden relative bg-white">
+      <div className="flex-1 overflow-hidden relative bg-theme-bg">
         {!activeTab ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-400 pointer-events-none select-none">
-            <div className="bg-gray-50 p-4 rounded-full mb-3">
-              <Split size={24} className="text-gray-300" />
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text/40 pointer-events-none select-none">
+            <div className="bg-theme-bg/50 p-4 rounded-full mb-3 border border-theme-border/10">
+              <Split size={24} className="text-theme-text/30" />
             </div>
             <p className="text-sm font-medium">Empty Pane</p>
           </div>
@@ -379,54 +381,86 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             onTogglePermission={(fileId) => togglePermission(activeTab.id, fileId)}
           />
         ) : activeTab.mode === 'diff' ? (
-          <div className="flex flex-col h-full bg-white">
-            <div className="bg-blue-50 px-3 py-2 border-b border-blue-100 text-blue-800 flex justify-between items-center text-xs">
+          <div className="flex flex-col h-full bg-theme-bg">
+            <div className="bg-blue-50/20 px-3 py-2 border-b border-theme-border/20 text-theme-text flex justify-between items-center text-xs">
               <span className="flex items-center gap-2">
                 <GitCommit size={14} />{' '}
                 <strong>{activeDiff?.versionLabel || 'Diff View'}</strong>
               </span>
-              <button
-                onClick={() => {
-                  clearDiff();
-                  setTabMode(pane.id, activeTab.id, 'editor');
-                }}
-                className="text-xs bg-white border border-blue-200 px-2 py-0.5 rounded hover:bg-blue-100"
-              >
-                Exit Diff
-              </button>
+
+              <div className="flex items-center gap-2">
+                <div className="flex bg-theme-bg/50 rounded p-0.5 border border-theme-border/10">
+                  <button
+                    onClick={() => setDiffMode('split')}
+                    className={`px-2 py-0.5 rounded transition-colors ${diffMode === 'split' ? 'bg-theme-bg shadow-sm text-theme-text' : 'text-theme-text/60 hover:bg-theme-text/10'}`}
+                  >
+                    Split
+                  </button>
+                  <button
+                    onClick={() => setDiffMode('inline')}
+                    className={`px-2 py-0.5 rounded transition-colors ${diffMode === 'inline' ? 'bg-theme-bg shadow-sm text-theme-text' : 'text-theme-text/60 hover:bg-theme-text/10'}`}
+                  >
+                    Inline
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => {
+                    clearDiff();
+                    setTabMode(pane.id, activeTab.id, 'editor');
+                  }}
+                  className="text-xs bg-theme-bg border border-theme-border/20 px-2 py-0.5 rounded hover:bg-theme-text/10 ml-2"
+                >
+                  Exit Diff
+                </button>
+              </div>
             </div>
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 overflow-hidden relative">
               {activeDiff ? (
-                <MonacoSideBySideDiff
-                  oldContent={activeDiff.oldContent}
-                  newContent={activeDiff.newContent}
-                  onAccept={(finalContent) => {
-                    // Apply accepted changes to the file
-                    updateFileContent(activeTab.id, finalContent);
-                    clearDiff();
-                    setTabMode(pane.id, activeTab.id, 'editor');
-                  }}
-                  onReject={(originalContent) => {
-                    // Revert to original content
-                    updateFileContent(activeTab.id, originalContent);
-                    clearDiff();
-                    setTabMode(pane.id, activeTab.id, 'editor');
-                  }}
-                />
+                <>
+                  <RenderedDiffViewer
+                    oldContent={activeDiff.oldContent}
+                    newContent={activeDiff.newContent}
+                    mode={diffMode}
+                  />
+                  {/* Floating Action Buttons */}
+                  <div className="absolute bottom-6 right-6 flex gap-2 shadow-lg rounded-lg overflow-hidden z-10">
+                    <button
+                      onClick={() => {
+                        updateFileContent(activeTab.id, activeDiff.newContent);
+                        clearDiff();
+                        setTabMode(pane.id, activeTab.id, 'editor');
+                      }}
+                      className="px-4 py-2 bg-green-600 text-white hover:bg-green-700 font-medium text-sm flex items-center gap-2"
+                    >
+                      Accept All
+                    </button>
+                    <button
+                      onClick={() => {
+                        updateFileContent(activeTab.id, activeDiff.oldContent);
+                        clearDiff();
+                        setTabMode(pane.id, activeTab.id, 'editor');
+                      }}
+                      className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 font-medium text-sm flex items-center gap-2"
+                    >
+                      Reject All
+                    </button>
+                  </div>
+                </>
               ) : (
-                <div className="flex items-center justify-center h-full text-gray-400">
+                <div className="flex items-center justify-center h-full text-theme-text/40">
                   No diff data available
                 </div>
               )}
             </div>
           </div>
         ) : activeTab.type === 'pdf' ? (
-          <div className="w-full h-full bg-gray-100 flex flex-col">
+          <div className="w-full h-full bg-theme-bg/20 flex flex-col">
             {(() => {
               const file = files.find((f) => f.id === activeTab.id);
               if (!file || !file.url) {
                 return (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                  <div className="flex flex-col items-center justify-center h-full text-theme-text/40">
                     <p>PDF source not available</p>
                     <p className="text-xs mt-2">Try refreshing the file list</p>
                   </div>
@@ -473,7 +507,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
         ) : (
           <div className="p-8">
             <h1 className="text-2xl font-bold mb-4">{activeTab.name}</h1>
-            <p className="text-gray-500">Generic Viewer</p>
+            <p className="text-theme-text/60">Generic Viewer</p>
           </div>
         )}
       </div>

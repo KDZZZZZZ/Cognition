@@ -98,10 +98,10 @@ export function ContextMenu({
       disabled={disabled}
       className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left transition-colors ${
         disabled
-          ? 'text-gray-300 cursor-not-allowed'
+          ? 'text-theme-text/30 cursor-not-allowed'
           : danger
-            ? 'text-red-600 hover:bg-red-50'
-            : 'text-gray-700 hover:bg-gray-100'
+            ? 'text-red-500 hover:bg-red-500/10'
+            : 'text-theme-text/80 hover:bg-theme-text/10'
       }`}
     >
       <Icon size={14} />
@@ -109,12 +109,12 @@ export function ContextMenu({
     </button>
   );
 
-  const Divider = () => <div className="border-t border-gray-200 my-1" />;
+  const Divider = () => <div className="border-t border-theme-border/20 my-1" />;
 
   return (
     <div
       ref={menuRef}
-      className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 min-w-[180px]"
+      className="fixed bg-theme-bg border border-theme-border/20 rounded-lg shadow-lg py-1 z-50 min-w-[180px]"
       style={{ left: adjustedX, top: adjustedY }}
     >
       {/* New items */}

@@ -14,20 +14,22 @@ interface IconProps {
 }
 
 export function FileIcon({ type, size = 16, className }: IconProps) {
+  const defaultClass = className || 'text-theme-text/70';
+
   switch (type) {
     case 'folder':
-      return <Folder size={size} className={className || 'text-gray-500'} />;
+      return <Folder size={size} className={className || 'text-theme-text/60'} />;
     case 'pdf':
-      return <FileText size={size} className={className || 'text-red-400'} />;
+      return <FileText size={size} className={className || 'text-theme-text'} />;
     case 'md':
-      return <FileCode size={size} className={className || 'text-blue-400'} />;
+      return <FileCode size={size} className={className || 'text-theme-text'} />;
     case 'session':
-      return <MessageSquare size={size} className={className || 'text-purple-400'} />;
+      return <MessageSquare size={size} className={className || 'text-theme-text'} />;
     case 'code':
-      return <FileLucideIcon size={size} className={className || 'text-yellow-500'} />;
+      return <FileLucideIcon size={size} className={className || 'text-theme-text'} />;
     case 'image':
-      return <FileLucideIcon size={size} className={className || 'text-purple-400'} />;
+      return <FileLucideIcon size={size} className={className || 'text-theme-text'} />;
     default:
-      return <FileText size={size} />;
+      return <FileText size={size} className={defaultClass} />;
   }
 }

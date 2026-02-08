@@ -4,6 +4,8 @@
   width: 100%;
   height: 100%;
   overflow: auto;
+  background-color: var(--theme-bg);
+  transition: background-color 0.3s;
 }
 
 .tiptap-markdown-editor {
@@ -12,8 +14,9 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 1rem;
   line-height: 1.75;
-  color: #1f2937;
+  color: var(--theme-text);
   outline: none;
+  transition: color 0.3s;
 }
 
 /* Stage 4: 视觉反馈 - 活跃行显示 MD 语法标记 */
@@ -25,14 +28,15 @@
   font-weight: 700;
   margin: 1.5rem 0 1rem;
   padding-bottom: 0.5rem;
-  border-bottom: 2px solid #e5e7eb;
+  border-bottom: 2px solid var(--theme-border);
+  opacity: 0.9;
 }
 
 .tiptap-markdown-editor h1::before {
   content: '#';
   position: absolute;
   left: -1.75rem;
-  color: #9ca3af;
+  color: var(--theme-text);
   font-weight: 400;
   opacity: 0;
   transition: opacity 0.2s;
@@ -40,7 +44,7 @@
 
 .tiptap-markdown-editor h1:focus-within::before,
 .tiptap-markdown-editor h1:hover::before {
-  opacity: 1;
+  opacity: 0.5;
 }
 
 .tiptap-markdown-editor h2 {
@@ -49,14 +53,15 @@
   font-weight: 600;
   margin: 1.25rem 0 0.75rem;
   padding-bottom: 0.25rem;
-  border-bottom: 1px solid #f3f4f6;
+  border-bottom: 1px solid var(--theme-border);
+  opacity: 0.8;
 }
 
 .tiptap-markdown-editor h2::before {
   content: '##';
   position: absolute;
   left: -2.25rem;
-  color: #9ca3af;
+  color: var(--theme-text);
   font-weight: 400;
   opacity: 0;
   transition: opacity 0.2s;
@@ -64,7 +69,7 @@
 
 .tiptap-markdown-editor h2:focus-within::before,
 .tiptap-markdown-editor h2:hover::before {
-  opacity: 1;
+  opacity: 0.5;
 }
 
 .tiptap-markdown-editor h3 {
@@ -78,7 +83,7 @@
   content: '###';
   position: absolute;
   left: -2.75rem;
-  color: #9ca3af;
+  color: var(--theme-text);
   font-weight: 400;
   opacity: 0;
   transition: opacity 0.2s;
@@ -86,7 +91,7 @@
 
 .tiptap-markdown-editor h3:focus-within::before,
 .tiptap-markdown-editor h3:hover::before {
-  opacity: 1;
+  opacity: 0.5;
 }
 
 /* 段落 */
@@ -99,11 +104,12 @@
   position: relative;
   margin: 1rem 0;
   padding: 0.75rem 1rem;
-  border-left: 4px solid #3b82f6;
-  background: #eff6ff;
+  border-left: 4px solid var(--theme-border);
+  background: rgba(128, 128, 128, 0.1);
   border-radius: 0 0.375rem 0.375rem 0;
-  color: #4b5563;
+  color: var(--theme-text);
   font-style: italic;
+  opacity: 0.9;
 }
 
 .tiptap-markdown-editor blockquote::before {
@@ -111,7 +117,7 @@
   position: absolute;
   left: -1.5rem;
   top: 0.75rem;
-  color: #9ca3af;
+  color: var(--theme-text);
   font-style: normal;
   opacity: 0;
   transition: opacity 0.2s;
@@ -119,7 +125,7 @@
 
 .tiptap-markdown-editor blockquote:focus-within::before,
 .tiptap-markdown-editor blockquote:hover::before {
-  opacity: 1;
+  opacity: 0.5;
 }
 
 /* 代码块 */
@@ -127,9 +133,11 @@
   position: relative;
   margin: 1rem 0;
   padding: 1rem;
-  background: #1f2937;
+  background: rgba(128, 128, 128, 0.1);
   border-radius: 0.5rem;
   overflow-x: auto;
+  border: 1px solid var(--theme-border);
+  opacity: 0.8;
 }
 
 .tiptap-markdown-editor pre::before {
@@ -137,7 +145,7 @@
   position: absolute;
   top: -1.25rem;
   left: 0;
-  color: #6b7280;
+  color: var(--theme-text);
   font-size: 0.75rem;
   opacity: 0;
   transition: opacity 0.2s;
@@ -148,7 +156,7 @@
   position: absolute;
   bottom: -1.25rem;
   left: 0;
-  color: #6b7280;
+  color: var(--theme-text);
   font-size: 0.75rem;
   opacity: 0;
   transition: opacity 0.2s;
@@ -158,13 +166,13 @@
 .tiptap-markdown-editor pre:hover::before,
 .tiptap-markdown-editor pre:focus-within::after,
 .tiptap-markdown-editor pre:hover::after {
-  opacity: 1;
+  opacity: 0.5;
 }
 
 .tiptap-markdown-editor pre code {
   font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
   font-size: 0.875rem;
-  color: #e5e7eb;
+  color: var(--theme-text);
   background: transparent;
   padding: 0;
 }
@@ -173,8 +181,8 @@
 .tiptap-markdown-editor code {
   font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
   font-size: 0.875em;
-  background: #f3f4f6;
-  color: #dc2626;
+  background: rgba(128, 128, 128, 0.1);
+  color: var(--theme-text);
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
 }
@@ -204,24 +212,26 @@
 .tiptap-markdown-editor hr {
   margin: 1.5rem 0;
   border: none;
-  border-top: 2px solid #e5e7eb;
+  border-top: 2px solid var(--theme-border);
+  opacity: 0.3;
 }
 
 /* 链接 */
 .tiptap-markdown-editor a {
-  color: #3b82f6;
+  color: var(--theme-text);
   text-decoration: underline;
   cursor: pointer;
+  opacity: 0.8;
 }
 
 .tiptap-markdown-editor a:hover {
-  color: #2563eb;
+  opacity: 1;
 }
 
 /* 粗体和斜体 */
 .tiptap-markdown-editor strong {
   font-weight: 600;
-  color: #111827;
+  color: var(--theme-text);
 }
 
 .tiptap-markdown-editor em {
@@ -230,37 +240,42 @@
 
 .tiptap-markdown-editor s {
   text-decoration: line-through;
-  color: #6b7280;
+  color: var(--theme-text);
+  opacity: 0.6;
 }
 
 /* Placeholder 样式 */
 .tiptap-markdown-editor p.is-empty::before {
   content: attr(data-placeholder);
   float: left;
-  color: #9ca3af;
+  color: var(--theme-text);
+  opacity: 0.4;
   pointer-events: none;
   height: 0;
 }
 
 .tiptap-markdown-editor.is-editor-empty::before {
   content: attr(data-placeholder);
-  color: #9ca3af;
+  color: var(--theme-text);
+  opacity: 0.4;
   pointer-events: none;
   position: absolute;
 }
 
 /* 选中状态 */
 .tiptap-markdown-editor ::selection {
-  background: #bfdbfe;
+  background: var(--theme-text);
+  color: var(--theme-bg);
+  opacity: 0.2;
 }
 
 /* ===== 斜杠命令样式 ===== */
 
 .slash-commands-list {
-  background: white;
+  background: var(--theme-bg);
   border-radius: 0.5rem;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--theme-border);
   padding: 0.5rem;
   min-width: 220px;
   max-height: 300px;
@@ -269,7 +284,8 @@
 
 .slash-commands-empty {
   padding: 0.75rem 1rem;
-  color: #6b7280;
+  color: var(--theme-text);
+  opacity: 0.6;
   font-size: 0.875rem;
 }
 
@@ -289,7 +305,7 @@
 
 .slash-command-item:hover,
 .slash-command-item.is-selected {
-  background: #f3f4f6;
+  background: rgba(128, 128, 128, 0.1);
 }
 
 .slash-command-icon {
@@ -298,14 +314,14 @@
   justify-content: center;
   width: 2rem;
   height: 2rem;
-  background: #e5e7eb;
+  background: rgba(128, 128, 128, 0.1);
   border-radius: 0.375rem;
-  color: #4b5563;
+  color: var(--theme-text);
 }
 
 .slash-command-item.is-selected .slash-command-icon {
-  background: #3b82f6;
-  color: white;
+  background: var(--theme-text);
+  color: var(--theme-bg);
 }
 
 .slash-command-content {
@@ -316,12 +332,13 @@
 .slash-command-title {
   font-size: 0.875rem;
   font-weight: 500;
-  color: #1f2937;
+  color: var(--theme-text);
 }
 
 .slash-command-description {
   font-size: 0.75rem;
-  color: #6b7280;
+  color: var(--theme-text);
+  opacity: 0.6;
 }
 
 /* Tippy 主题 */
@@ -337,17 +354,18 @@
 /* ===== Diff 样式 ===== */
 
 .diff-addition {
-  background-color: #dcfce7;
-  color: #166534;
+  background-color: rgba(0, 255, 0, 0.15);
+  color: var(--theme-text);
   text-decoration: none;
   padding: 1px 2px;
   border-radius: 2px;
 }
 
 .diff-deletion {
-  background-color: #fee2e2;
-  color: #991b1b;
+  background-color: rgba(255, 0, 0, 0.15);
+  color: var(--theme-text);
   text-decoration: line-through;
+  opacity: 0.7;
   padding: 1px 2px;
   border-radius: 2px;
 }

@@ -17,6 +17,7 @@ from app.services.tools.executor import tool_executor
 from app.services.tools.middleware import permission_middleware
 from app.services.tools.base import PermissionLevel
 from app.api.viewport import get_viewport_context
+from app.prompts.system_prompts import SystemPrompts
 from app.websocket import manager
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -61,7 +62,7 @@ async def chat_completion(request: ChatRequest, db: AsyncSession = Depends(get_d
 
         # Invalidate any cached permissions for this session
         permission_middleware.invalidate_cache(request.session_id)
-    elif request.permissions and hasattr(request, 'permissions'):
+    elif request.permissions is not None:
         # Session exists but permissions were provided - update them
         # This ensures frontend permissions are synced to backend
         session.permissions = request.permissions
@@ -107,10 +108,12 @@ async def chat_completion(request: ChatRequest, db: AsyncSession = Depends(get_d
         # Check for viewport context from viewport tracking endpoint
         viewport_ctx = get_viewport_context(request.session_id)
         if viewport_ctx:
-            viewport_text = f"User is currently viewing: {viewport_ctx['file_name']} ({viewport_ctx['file_type']})"
-            if viewport_ctx.get('page'):
-                viewport_text += f", Page {viewport_ctx['page']}"
-            context_parts.append(f"[Current Viewport Context]:\n{viewport_text}")
+            viewport_text = SystemPrompts.format_viewport_context(
+                file_name=viewport_ctx.get('file_name', 'Unknown'),
+                file_type=viewport_ctx.get('file_type', 'Unknown'),
+                page=viewport_ctx.get('page')
+            )
+            context_parts.append(viewport_text)
 
     # 2. Search for relevant document chunks
     if request.context_files:
@@ -487,28 +490,7 @@ def _build_system_prompt(permissions: dict = None, permitted_files_info: dict = 
         permissions: Dict of file_id -> permission level
         permitted_files_info: Info about files the agent has permission to access
     """
-    base_prompt = """You are an AI assistant for the Knowledge IDE. You help users:
-
-1. Understand and summarize documents they are reading
-2. Answer questions based on document content
-3. Help edit and improve their markdown notes
-4. Search and find relevant information across documents
-
-When responding:
-- Be concise and direct
-- Cite specific documents and page numbers when referencing content
-- If you need to read a document, use the read_document tool
-- If you need to search for information, use the search_documents tool
-- If you need to modify a markdown file, use update_document or append_document
-- Always ask for confirmation before making significant changes
-
-Available tools:
-- read_document: Read the full content of any accessible document (md, pdf, docx, txt)
-- search_documents: Search for relevant content using semantic search
-- update_document: Replace the entire content of a markdown file (.md only)
-- append_document: Add content to the end of a markdown file (.md only)
-
-Important: Only .md files can be modified. PDF and DOCX files are read-only."""
+    base_prompt = SystemPrompts.MAIN_SYSTEM_PROMPT
 
     # Only show files the agent has permission to access (Issue 6 fix)
     if permitted_files_info:

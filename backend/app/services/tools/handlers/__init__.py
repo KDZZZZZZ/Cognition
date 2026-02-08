@@ -8,6 +8,12 @@ from app.services.tools.handlers.document_tool import (
     UpdateDocumentTool,
     AppendDocumentTool
 )
+from app.services.tools.handlers.editor_ops import (
+    UpdateFileTool,
+    UpdateBlockTool,
+    InsertBlockTool,
+    DeleteBlockTool
+)
 from app.services.tools.handlers.search_tool import SearchDocumentsTool
 from app.services.tools.registry import register_tools
 
@@ -24,6 +30,12 @@ def initialize_tools() -> None:
         ReadDocumentTool(),
         UpdateDocumentTool(),
         AppendDocumentTool(),
+
+        # Editor Block Operations
+        UpdateFileTool(),
+        UpdateBlockTool(),
+        InsertBlockTool(),
+        DeleteBlockTool(),
 
         # Search tools
         SearchDocumentsTool(),

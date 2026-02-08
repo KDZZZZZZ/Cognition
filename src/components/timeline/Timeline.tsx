@@ -142,20 +142,20 @@ export function Timeline() {
 
   return (
     <div
-      className="border-t border-gray-200 bg-white flex flex-col"
+      className="border-t border-theme-border/20 bg-theme-bg/50 flex flex-col transition-colors duration-300"
       style={{ height: timelineExpanded ? '35%' : 'auto' }}
     >
       <div
-        className="p-2 bg-gray-100 border-b border-gray-200 flex items-center justify-between cursor-pointer"
+        className="p-2 bg-theme-bg/30 border-b border-theme-border/20 flex items-center justify-between cursor-pointer"
         onClick={toggleTimeline}
       >
-        <div className="flex items-center gap-1 text-xs font-bold text-gray-600 uppercase">
+        <div className="flex items-center gap-1 text-xs font-bold text-theme-text/60 uppercase">
           {timelineExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           Timeline
         </div>
         <div className="flex items-center gap-2">
           {loading && timelineExpanded && (
-            <Loader2 size={12} className="animate-spin text-gray-500" />
+            <Loader2 size={12} className="animate-spin text-theme-text/50" />
           )}
           {timelineExpanded && activeFileId && !activeFileId.includes('_') && (
             <button
@@ -178,10 +178,10 @@ export function Timeline() {
                   setLoading(false);
                 });
               }}
-              className="p-1 hover:bg-gray-200 rounded transition-colors"
+              className="p-1 hover:bg-theme-text/10 rounded transition-colors"
               title="Refresh timeline"
             >
-              <RefreshCw size={12} className="text-gray-500" />
+              <RefreshCw size={12} className="text-theme-text/50" />
             </button>
           )}
         </div>
@@ -190,22 +190,22 @@ export function Timeline() {
       {timelineExpanded && (
         <div className="flex-1 overflow-y-auto p-4">
           {!activeFileId ? (
-            <div className="text-xs text-gray-400 text-center mt-2">
+            <div className="text-xs text-theme-text/40 text-center mt-2">
               No file active
             </div>
           ) : activeFileId.includes('_') ? (
-            <div className="text-xs text-gray-400 text-center mt-2">
+            <div className="text-xs text-theme-text/40 text-center mt-2">
               Local sessions don't have version history
             </div>
           ) : loading ? (
             <div className="flex items-center justify-center mt-4">
-              <Loader2 size={16} className="animate-spin text-gray-400" />
-              <span className="ml-2 text-xs text-gray-400">Loading...</span>
+              <Loader2 size={16} className="animate-spin text-theme-text/40" />
+              <span className="ml-2 text-xs text-theme-text/40">Loading...</span>
             </div>
           ) : error ? (
             <div className="text-xs text-red-400 text-center mt-2">{error}</div>
           ) : timeline.length === 0 ? (
-            <div className="text-xs text-gray-400 text-center mt-2">
+            <div className="text-xs text-theme-text/40 text-center mt-2">
               No versions yet. Edit the file to create a version.
             </div>
           ) : (
@@ -213,20 +213,20 @@ export function Timeline() {
               <div
                 key={item.id}
                 onClick={() => handleTimelineClick(item)}
-                className="mb-4 relative pl-3 border-l border-gray-200 cursor-pointer group hover:bg-gray-50 rounded p-1 -ml-1"
+                className="mb-4 relative pl-3 border-l border-theme-border/20 cursor-pointer group hover:bg-theme-text/5 rounded p-1 -ml-1 transition-colors"
               >
                 <div
-                  className={`absolute -left-[5px] top-1.5 w-2.5 h-2.5 rounded-full border-2 border-white group-hover:scale-110 transition-transform ${getChangeTypeColor(
+                  className={`absolute -left-[5px] top-1.5 w-2.5 h-2.5 rounded-full border-2 border-theme-bg group-hover:scale-110 transition-transform ${getChangeTypeColor(
                     item.changeType
                   )}`}
                 />
-                <div className="text-xs font-medium text-gray-700 group-hover:text-blue-600">
+                <div className="text-xs font-medium text-theme-text/80 group-hover:text-theme-text">
                   {item.message}
                 </div>
-                <div className="text-[10px] text-gray-400 mt-0.5">
+                <div className="text-[10px] text-theme-text/40 mt-0.5">
                   {item.date} • {item.author}
                 </div>
-                <div className="text-[10px] text-gray-300 mt-0.5 capitalize">
+                <div className="text-[10px] text-theme-text/30 mt-0.5 capitalize">
                   {item.changeType}
                 </div>
               </div>

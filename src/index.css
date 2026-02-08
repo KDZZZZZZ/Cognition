@@ -7,7 +7,12 @@
   line-height: 1.5;
   font-weight: 400;
 
-  color-scheme: light dark;
+  /* Day Theme (Default) */
+  --theme-bg: #FFFDE4;
+  --theme-text: #FF8353;
+  --theme-border: #FF8353; /* Using text color for borders for consistency */
+
+  color-scheme: light;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -15,10 +20,22 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Night Theme */
+.dark {
+  --theme-bg: #66706A;
+  --theme-text: #71FFB0;
+  --theme-border: #71FFB0;
+
+  color-scheme: dark;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background-color: var(--theme-bg);
+  color: var(--theme-text);
+  transition: background-color 0.3s, color 0.3s;
 }
 
 #root {

@@ -17,6 +17,7 @@ interface FileState {
   selectFile: (file: FileMetadata | null) => void;
   uploadFile: (file: File) => Promise<string | null>;
   getFileContent: (fileId: string) => Promise<string | null>;
+  setFileContent: (fileId: string, content: string) => void;
   updateFileContent: (fileId: string, content: string) => Promise<boolean>;
   deleteFile: (fileId: string) => Promise<void>;
   getFileChunks: (fileId: string) => Promise<DocumentChunk[]>;
@@ -87,6 +88,13 @@ export const useFileStore = create<FileState>((set, get) => ({
       console.error('Failed to load file content:', err);
     }
     return null;
+  },
+
+  setFileContent: (fileId, content) => {
+    set((state) => ({
+      fileContents: { ...state.fileContents, [fileId]: content },
+      lastUpdated: Date.now()
+    }));
   },
 
   updateFileContent: async (fileId, content) => {

@@ -82,12 +82,16 @@ export interface ContextMenuState {
   file: FileNode | null;
 }
 
-// UI State
+  // UI State
+export type Theme = 'light' | 'dark';
+
 export interface UIState {
+  theme: Theme;
   sidebarOpen: boolean;
   activePaneId: string | null;
   timelineExpanded: boolean;
   contextMenu: ContextMenuState;
+  toggleTheme: () => void;
   toggleSidebar: () => void;
   setActivePane: (paneId: string | null) => void;
   toggleTimeline: () => void;

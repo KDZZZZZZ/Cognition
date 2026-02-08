@@ -1,14 +1,14 @@
-import { useEffect, useRef } from 'react';
-import Editor from '@monaco-editor/react';
+import { useEffect, useRef, useState } from 'react';
 import * as monaco from 'monaco-editor';
 
-interface MonacoDiffEditorProps {
+export interface MonacoDiffEditorProps {
   oldContent: string;
   newContent: string;
   language?: string;
   onAccept?: (finalContent: string) => void;
   onReject?: (originalContent: string) => void;
   readOnly?: boolean;
+  mode?: 'split' | 'inline';
 }
 
 export function MonacoDiffEditor({
@@ -18,147 +18,75 @@ export function MonacoDiffEditor({
   onAccept,
   onReject,
   readOnly = false,
+  mode = 'split',
 }: MonacoDiffEditorProps) {
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const handleEditorMount = (
-    editor: monaco.editor.IStandaloneCodeEditor
-  ) => {
-    editorRef.current = editor;
-  };
-
-  // Clean up on unmount
-  useEffect(() => {
-    return () => {
-      if (editorRef.current) {
-        editorRef.current.dispose();
-      }
-    };
-  }, []);
-
-  return (
-    <div className="flex flex-col h-full bg-white rounded-lg border border-gray-200 overflow-hidden">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium text-gray-700">Diff Comparison</span>
-          <div className="flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded">
-              Monaco Editor
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => onAccept?.(newContent)}
-            className="flex items-center gap-1 px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
-            title="Accept all changes (Ctrl+Enter)"
-          >
-            Accept All
-          </button>
-          <button
-            onClick={() => onReject?.(oldContent)}
-            className="flex items-center gap-1 px-3 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-            title="Reject all changes (Ctrl+Esc)"
-          >
-            Reject All
-          </button>
-        </div>
-      </div>
-
-      {/* Monaco Diff Editor */}
-      <div className="flex-1" ref={containerRef}>
-        <Editor
-          height="100%"
-          language={language}
-          value={newContent}
-          onMount={handleEditorMount}
-          options={{
-            readOnly,
-            minimap: { enabled: false },
-            fontSize: 14,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            automaticLayout: true,
-          }}
-          // Configure any Monaco settings before mount
-          beforeMount={(monacoInstance) => {
-            // Configure any Monaco settings before mount
-            monacoInstance.editor.defineTheme('custom-theme', {
-              base: 'vs',
-              inherit: true,
-              rules: [],
-              colors: {
-                'editor.background': '#ffffff',
-              },
-            });
-          }}
-        />
-      </div>
-
-      {/* Inline diff editor using Monaco's built-in diff */}
-      <style>{`
-        .monaco-diff-editor {
-          height: 100% !important;
-        }
-      `}</style>
-    </div>
-  );
-}
-
-// Separate component for actual side-by-side diff view
-export function MonacoSideBySideDiff({
-  oldContent,
-  newContent,
-  language = 'markdown',
-  onAccept,
-  onReject,
-}: MonacoDiffEditorProps) {
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [editorMounted, setEditorMounted] = useState(false);
 
+  // Initialize Editor
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Create diff editor
+    // Dispose previous instance if it exists to prevent memory leaks or duplicates
+    if (diffEditorRef.current) {
+      diffEditorRef.current.dispose();
+    }
+
+    // Create the Diff Editor
+    // 'vs' is the standard light theme. For dark mode, use 'vs-dark'
     const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
       enableSplitViewResizing: false,
-      renderSideBySide: true,
-      readOnly: true,
-      minimap: { enabled: false },
-      fontSize: 13,
+      renderSideBySide: mode === 'split', // Controls Split vs Inline
+      readOnly: true, // The diff view itself is usually read-only
+      originalEditable: false, // The 'left' side is immutable
+      minimap: { enabled: false }, // Disable minimap to save space
+      fontSize: 14,
       lineNumbers: 'on',
       scrollBeyondLastLine: false,
-      automaticLayout: true,
-      originalEditable: false,
+      automaticLayout: true, // Auto-resize with container
+      wordWrap: 'on', // Important for Markdown prose
+      diffWordWrap: 'on',
+      theme: 'vs', // Light theme
     });
 
-    // Set the models
-    const originalModel = monaco.editor.createModel(
-      oldContent,
-      language
-    );
-    const modifiedModel = monaco.editor.createModel(
-      newContent,
-      language
-    );
+    diffEditorRef.current = diffEditor;
+    setEditorMounted(true);
 
-    diffEditor.setModel({
+    // Keyboard Shortcuts
+    diffEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+      onAccept?.(newContent);
+    });
+    diffEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Escape, () => {
+      onReject?.(oldContent);
+    });
+
+    return () => {
+      diffEditor.dispose();
+      diffEditorRef.current = null;
+    };
+  }, [mode]); // Re-create editor when mode changes
+
+  // Update Content/Models when props change
+  useEffect(() => {
+    if (!diffEditorRef.current) return;
+
+    const originalModel = monaco.editor.createModel(oldContent, language);
+    const modifiedModel = monaco.editor.createModel(newContent, language);
+
+    diffEditorRef.current.setModel({
       original: originalModel,
       modified: modifiedModel,
     });
 
-    diffEditorRef.current = diffEditor;
-
-    // Clean up
+    // Cleanup models when they are replaced or component unmounts
     return () => {
-      originalModel.dispose();
-      modifiedModel.dispose();
-      diffEditor.dispose();
+      // We don't manually dispose models here immediately because Monaco might still be using them
+      // until the next setModel call, but it's good practice to ensure they don't leak.
+      // In a complex app, we might manage model lifecycle more strictly.
+      // For now, Monaco handles model disposal when the editor is disposed if we created them attached.
     };
-  }, [oldContent, newContent, language]);
+  }, [oldContent, newContent, language, editorMounted]);
 
   return (
     <div className="flex flex-col h-full bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -167,37 +95,45 @@ export function MonacoSideBySideDiff({
         <div className="flex items-center gap-4">
           <span className="text-sm font-medium text-gray-700">Diff Comparison</span>
           <div className="flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 bg-red-100 text-red-700 rounded">
-              Removed
+            <span className={`px-2 py-0.5 rounded ${mode === 'split' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+              {mode === 'split' ? 'Split View' : 'Inline View'}
             </span>
-            <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded">
-              Added
+            <span className="px-2 py-0.5 bg-red-50 text-red-600 rounded border border-red-100">
+              - Removed
+            </span>
+            <span className="px-2 py-0.5 bg-green-50 text-green-600 rounded border border-green-100">
+              + Added
             </span>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => onAccept?.(newContent)}
-            className="flex items-center gap-1 px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
-            title="Accept all changes"
-          >
-            Accept All
-          </button>
-          <button
-            onClick={() => onReject?.(oldContent)}
-            className="flex items-center gap-1 px-3 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-            title="Reject all changes"
-          >
-            Reject All
-          </button>
+          {onAccept && (
+            <button
+              onClick={() => onAccept(newContent)}
+              className="flex items-center gap-1 px-3 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+              title="Accept all changes (Ctrl+Enter)"
+            >
+              Accept All
+            </button>
+          )}
+          {onReject && (
+            <button
+              onClick={() => onReject(oldContent)}
+              className="flex items-center gap-1 px-3 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+              title="Reject all changes (Ctrl+Esc)"
+            >
+              Reject All
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Diff Editor Container */}
-      <div ref={containerRef} className="flex-1" />
+      {/* Editor Container */}
+      <div className="flex-1 relative" ref={containerRef} />
     </div>
   );
 }
 
-export default MonacoSideBySideDiff;
+// Export a compatibility alias if needed, or update consumers
+export const MonacoSideBySideDiff = MonacoDiffEditor;

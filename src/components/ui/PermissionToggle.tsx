@@ -15,13 +15,13 @@ export function PermissionToggle({ status, onClick, syncing = false }: Permissio
 
     switch (status) {
       case 'read':
-        return <Eye size={14} className="text-blue-500" />;
+        return <Eye size={14} className="text-theme-text" />;
       case 'write':
-        return <Pencil size={14} className="text-green-500" />;
+        return <Pencil size={14} className="text-theme-text" />;
       case 'none':
-        return <EyeOff size={14} className="text-gray-400" />;
+        return <EyeOff size={14} className="text-theme-text/40" />;
       default:
-        return <Eye size={14} className="text-blue-500" />;
+        return <Eye size={14} className="text-theme-text" />;
     }
   };
 
@@ -56,9 +56,9 @@ export function PermissionToggle({ status, onClick, syncing = false }: Permissio
     <button
       onClick={onClick}
       disabled={syncing}
-      className={`p-1.5 rounded hover:bg-gray-200 transition-colors flex items-center gap-1 border border-gray-200 ${getBgColor()} ${
-        syncing ? 'opacity-70 cursor-wait' : ''
-      }`}
+      className={`p-1.5 rounded hover:bg-theme-text/20 transition-colors flex items-center gap-1 border border-theme-border/20 ${
+        status === 'none' ? 'bg-theme-text/5 text-theme-text/40' : 'bg-theme-text/10 text-theme-text'
+      } ${syncing ? 'opacity-70 cursor-wait' : ''}`}
       title={getLabel()}
     >
       {getIcon()}

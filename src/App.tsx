@@ -1,4 +1,4 @@
-import { Menu } from 'lucide-react';
+import { Menu, Moon, Sun } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { PaneRenderer } from './components/pane/PaneRenderer';
 import { useUIStore } from './stores/uiStore';
@@ -6,7 +6,7 @@ import { usePaneStore } from './stores/paneStore';
 import { FileNode, ViewMode } from './types';
 
 function App() {
-  const { sidebarOpen, toggleSidebar, activePaneId, setActivePane } = useUIStore();
+  const { sidebarOpen, toggleSidebar, activePaneId, setActivePane, theme, toggleTheme } = useUIStore();
   const { panes, activePaneId: storeActivePaneId, createPane, openTab } = usePaneStore();
 
   const handleDrop = (e: React.DragEvent, paneId: string) => {
@@ -29,28 +29,37 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-full bg-white text-gray-800 font-sans overflow-hidden">
-      <div className="h-12 bg-white border-b border-gray-200 flex items-center px-4 justify-between flex-shrink-0 z-20 shadow-sm">
+    <div className="flex flex-col h-screen w-full bg-theme-bg text-theme-text font-sans overflow-hidden transition-colors duration-300">
+      <div className="h-12 bg-theme-bg border-b border-theme-border flex items-center px-4 justify-between flex-shrink-0 z-20 shadow-sm transition-colors duration-300">
         <div className="flex items-center gap-4">
           <button
             onClick={toggleSidebar}
-            className="p-1 hover:bg-gray-100 rounded text-gray-600"
+            className="p-1 hover:bg-theme-text/10 rounded text-theme-text/80 transition-colors"
           >
             <Menu size={20} />
           </button>
         </div>
-        <div className="text-sm font-medium text-gray-400 select-none">
+        <div className="text-sm font-medium text-theme-text/60 select-none">
           Knowledge IDE
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleTheme}
+            className="p-1 hover:bg-theme-text/10 rounded text-theme-text/80 transition-colors"
+            title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+          >
+            {theme === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+          </button>
         </div>
       </div>
       <div className="flex-1 flex overflow-hidden relative">
         {sidebarOpen && <Sidebar />}
-        <div className="flex-1 flex bg-gray-100 relative overflow-x-auto scroll-smooth">
+        <div className="flex-1 flex bg-theme-bg/50 relative overflow-x-auto scroll-smooth">
           {panes.length === 0 ? (
-            <div className="w-full flex flex-col items-center justify-center text-gray-400">
+            <div className="w-full flex flex-col items-center justify-center text-theme-text/40">
               <button
                 onClick={createPane}
-                className="bg-white p-6 rounded-xl shadow-sm hover:shadow-md transition-all flex flex-col items-center"
+                className="bg-theme-bg border-2 border-dashed border-theme-border/30 p-6 rounded-xl hover:border-theme-border hover:text-theme-text transition-all flex flex-col items-center"
               >
                 <span className="text-sm font-medium">New Pane</span>
               </button>

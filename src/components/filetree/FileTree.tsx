@@ -358,8 +358,8 @@ export function FileTree() {
     return (
       <div key={item.id} className="relative">
         <div
-          className={`group flex items-center gap-1 py-1 cursor-pointer text-sm hover:bg-gray-100 select-none relative ${
-            activeFileId === item.id ? 'bg-blue-100 text-blue-700' : 'text-gray-700'
+          className={`group flex items-center gap-1 py-1 cursor-pointer text-sm hover:bg-theme-text/10 select-none relative transition-colors ${
+            activeFileId === item.id ? 'bg-theme-text/20 text-theme-text font-medium' : 'text-theme-text/80'
           } ${dropIndicatorClass}`}
           style={{ paddingLeft: `${depth * 16 + 8}px`, paddingRight: '8px' }}
           onClick={() =>
@@ -374,7 +374,7 @@ export function FileTree() {
           onDragEnd={handleDragEnd}
         >
           {/* Expand/Collapse icon for folders */}
-          <span className="w-4 flex-shrink-0 text-gray-400">
+          <span className="w-4 flex-shrink-0 text-theme-text/40">
             {item.type === 'folder' ? (
               item.isOpen ? (
                 <ChevronDown size={14} />
@@ -414,11 +414,11 @@ export function FileTree() {
         }}
       >
         {/* Header */}
-        <div className="px-4 py-2 text-xs font-bold text-gray-400 uppercase flex items-center justify-between">
+        <div className="px-4 py-2 text-xs font-bold text-theme-text/40 uppercase flex items-center justify-between">
           <span>Explorer</span>
           <button
             onClick={handleRefresh}
-            className={`p-1 hover:bg-gray-200 rounded transition-colors ${refreshing ? 'animate-spin' : ''}`}
+            className={`p-1 hover:bg-theme-text/10 rounded transition-colors ${refreshing ? 'animate-spin' : ''}`}
             title="Refresh"
           >
             <RefreshCw size={12} />
@@ -429,7 +429,7 @@ export function FileTree() {
         <div className="px-2 pb-2 flex items-center gap-1">
           <button
             onClick={() => openNewDialog('md')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors"
             title="New File (supports path: folder/file.md)"
           >
             <FileText size={12} />
@@ -437,7 +437,7 @@ export function FileTree() {
           </button>
           <button
             onClick={() => openNewDialog('session')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors"
             title="New Session"
           >
             <MessageSquare size={12} />
@@ -445,13 +445,13 @@ export function FileTree() {
           </button>
           <button
             onClick={() => openNewDialog('folder')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors"
             title="New Folder (supports path: folder1/folder2)"
           >
             <Folder size={12} />
             <span>Folder</span>
           </button>
-          <label className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-200 rounded-md transition-colors cursor-pointer">
+          <label className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors cursor-pointer">
             <Upload size={12} />
             <span>Upload</span>
             <input
@@ -466,11 +466,11 @@ export function FileTree() {
 
         {/* File Tree */}
         {loading ? (
-          <div className="px-4 py-8 text-center text-gray-400 text-sm">
+          <div className="px-4 py-8 text-center text-theme-text/40 text-sm">
             Loading files...
           </div>
         ) : fileTree.length === 0 ? (
-          <div className="px-4 py-8 text-center text-gray-400 text-sm">
+          <div className="px-4 py-8 text-center text-theme-text/40 text-sm">
             No files yet.
             <br />
             Create a file, session, or folder to get started.

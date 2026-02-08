@@ -80,18 +80,18 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
   };
 
   return (
-    <div className="flex flex-col h-full bg-gray-50">
+    <div className="flex flex-col h-full bg-theme-bg/30">
       {/* Header with Model Selection */}
-      <div className="bg-white border-b border-gray-200 px-4 py-2 shadow-sm z-10">
+      <div className="bg-theme-bg border-b border-theme-border/20 px-4 py-2 shadow-sm z-10">
         <div className="flex items-center justify-between mb-2">
-          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+          <div className="text-xs font-bold text-theme-text/60 uppercase tracking-wider flex items-center gap-2">
             <Bot size={14} /> <span>AI Assistant</span>
           </div>
           <div className="flex items-center gap-2">
             <select
               value={model}
               onChange={handleModelChange}
-              className="text-xs border border-gray-300 rounded px-2 py-1"
+              className="text-xs border border-theme-border/30 bg-theme-bg text-theme-text rounded px-2 py-1 focus:outline-none focus:border-theme-border"
             >
               <option value="deepseek-chat">DeepSeek Chat</option>
               <option value="deepseek-reasoner">DeepSeek Reasoner</option>
@@ -107,7 +107,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
                 Offline
               </span>
             ) : (
-              <span className="text-xs text-gray-400 flex items-center gap-1">
+              <span className="text-xs text-theme-text/40 flex items-center gap-1">
                 <Loader2 size={12} className="animate-spin" />
                 Checking...
               </span>
@@ -123,7 +123,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
 
         {/* Context Permissions */}
         <div className="flex items-center gap-2">
-          <div className="text-xs text-gray-400">Context Files:</div>
+          <div className="text-xs text-theme-text/40">Context Files:</div>
           {syncing && (
             <span className="text-xs text-blue-500 flex items-center gap-1">
               <Loader2 size={10} className="animate-spin" />
@@ -132,7 +132,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
           )}
         </div>
         {allFiles.length === 0 ? (
-          <div className="text-xs text-gray-400 italic">No files open.</div>
+          <div className="text-xs text-theme-text/40 italic">No files open.</div>
         ) : (
           <div className="flex flex-wrap gap-2">
             {allFiles.map((file) => {
@@ -141,15 +141,15 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
               return (
                 <div
                   key={file.id}
-                  className={`flex items-center gap-2 bg-white border border-gray-200 rounded-md pl-2 pr-1 py-1 text-xs shadow-sm transition-all ${
+                  className={`flex items-center gap-2 bg-theme-bg border border-theme-border/20 rounded-md pl-2 pr-1 py-1 text-xs shadow-sm transition-all ${
                     status === 'none' ? 'opacity-50' : 'opacity-100'
                   }`}
                 >
                   <FileIcon type={file.type} />
-                  <span className="max-w-[80px] truncate font-medium text-gray-700">
+                  <span className="max-w-[80px] truncate font-medium text-theme-text/80">
                     {file.name}
                   </span>
-                  <div className="h-4 w-px bg-gray-200 mx-1"></div>
+                  <div className="h-4 w-px bg-theme-border/20 mx-1"></div>
                   <PermissionToggle
                     status={status}
                     syncing={isFileSyncing}
@@ -171,18 +171,18 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
       <div className="flex-1 p-4 overflow-y-auto space-y-4">
         {messages.length === 0 && (
           <div className="flex gap-3">
-            <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-theme-text/10 flex items-center justify-center text-theme-text flex-shrink-0">
               <Bot size={18} />
             </div>
-            <div className="bg-white p-3 rounded-lg rounded-tl-none border border-gray-200 shadow-sm text-sm text-gray-700 max-w-[85%]">
+            <div className="bg-theme-bg p-3 rounded-lg rounded-tl-none border border-theme-border/20 shadow-sm text-sm text-theme-text/80 max-w-[85%]">
               <p className="mb-2">Hello! I'm your AI assistant. I can help you:</p>
-              <ul className="list-disc list-inside text-gray-600 space-y-1">
+              <ul className="list-disc list-inside text-theme-text/70 space-y-1">
                 <li>Summarize documents</li>
                 <li>Answer questions about content</li>
                 <li>Edit and improve your writing</li>
                 <li>Search across multiple files</li>
               </ul>
-              <p className="mt-2 text-xs text-gray-400">
+              <p className="mt-2 text-xs text-theme-text/40">
                 {model === 'deepseek-reasoner' && (
                   <span className="flex items-center gap-1">
                     <Brain size={12} /> Deep reasoning mode enabled
@@ -196,17 +196,17 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
         {messages.map((msg) => (
           <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
             {msg.role === 'assistant' && (
-              <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 flex-shrink-0">
+              <div className="w-8 h-8 rounded-full bg-theme-text/10 flex items-center justify-center text-theme-text flex-shrink-0">
                 <Bot size={18} />
               </div>
             )}
             <div className={`max-w-[85%] ${
               msg.role === 'user'
-                ? 'bg-blue-500 text-white rounded-lg rounded-tr-none px-4 py-2'
-                : 'bg-white p-3 rounded-lg rounded-tl-none border border-gray-200 shadow-sm text-sm text-gray-700'
+                ? 'bg-theme-text text-theme-bg rounded-lg rounded-tr-none px-4 py-2'
+                : 'bg-theme-bg p-3 rounded-lg rounded-tl-none border border-theme-border/20 shadow-sm text-sm text-theme-text/80'
             }`}>
               {msg.role === 'assistant' && msg.tool_calls && (
-                <div className="text-xs text-purple-600 mb-2 pb-2 border-b border-purple-100">
+                <div className="text-xs text-theme-text/60 mb-2 pb-2 border-b border-theme-border/10">
                   <span className="font-medium">Used tools:</span> {msg.tool_calls.map((t: any) => t.name).join(', ')}
                 </div>
               )}
@@ -217,11 +217,11 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
 
         {loading && (
           <div className="flex gap-3">
-            <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600 flex-shrink-0">
+            <div className="w-8 h-8 rounded-full bg-theme-text/10 flex items-center justify-center text-theme-text flex-shrink-0">
               <Bot size={18} />
             </div>
-            <div className="bg-white px-4 py-3 rounded-lg rounded-tl-none border border-gray-200 shadow-sm text-sm">
-              <Loader2 size={14} className="animate-spin text-purple-500" />
+            <div className="bg-theme-bg px-4 py-3 rounded-lg rounded-tl-none border border-theme-border/20 shadow-sm text-sm">
+              <Loader2 size={14} className="animate-spin text-theme-text" />
             </div>
           </div>
         )}
@@ -236,21 +236,21 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-gray-200 bg-white">
+      <div className="p-4 border-t border-theme-border/20 bg-theme-bg">
         <div className="relative">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
-            className="w-full pl-4 pr-10 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-200 text-sm resize-none"
+            className="w-full pl-4 pr-10 py-2.5 border border-theme-border/30 bg-theme-bg text-theme-text rounded-lg focus:outline-none focus:ring-2 focus:ring-theme-text/20 text-sm resize-none placeholder:text-theme-text/30"
             rows={2}
             disabled={loading}
           />
           <button
             onClick={handleSend}
             disabled={loading || !input.trim()}
-            className="absolute right-2 bottom-2 p-1.5 text-purple-600 hover:bg-purple-50 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            className="absolute right-2 bottom-2 p-1.5 text-theme-text hover:bg-theme-text/10 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>

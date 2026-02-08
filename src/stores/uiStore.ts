@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { UIState } from '../types';
 
 export const useUIStore = create<UIState>((set) => ({
+  theme: 'light',
   sidebarOpen: true,
   activePaneId: null,
   timelineExpanded: true,
@@ -11,6 +12,16 @@ export const useUIStore = create<UIState>((set) => ({
     y: 0,
     file: null,
   },
+
+  toggleTheme: () => set((state) => {
+    const newTheme = state.theme === 'light' ? 'dark' : 'light';
+    if (newTheme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    return { theme: newTheme };
+  }),
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 
