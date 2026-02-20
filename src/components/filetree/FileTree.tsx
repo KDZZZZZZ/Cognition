@@ -273,7 +273,8 @@ export function FileTree() {
       let currentParentId = selectedParentId;
 
       for (const part of parts) {
-        const folderId = createFolder(part, currentParentId);
+        const folderId = await createFolder(part, currentParentId);
+        if (!folderId) break;
         currentParentId = folderId;
       }
     } else if (dialogType === 'md' || dialogType === 'session') {
@@ -284,7 +285,8 @@ export function FileTree() {
         let currentParentId = selectedParentId;
         // Create folders for all but the last part
         for (let i = 0; i < parts.length - 1; i++) {
-          const folderId = createFolder(parts[i], currentParentId);
+          const folderId = await createFolder(parts[i], currentParentId);
+          if (!folderId) break;
           currentParentId = folderId;
         }
         // Create the file in the final folder
@@ -304,7 +306,7 @@ export function FileTree() {
     // For now, just create a copy with "(copy)" suffix
     const newName = clipboard.name.replace(/(\.[^.]+)?$/, ' (copy)$1');
     if (clipboard.type === 'folder') {
-      createFolder(newName, parentId);
+      await createFolder(newName, parentId);
     } else if (clipboard.type === 'md' || clipboard.type === 'session') {
       await createFile(newName, clipboard.type as 'md' | 'session', parentId);
     }

@@ -74,6 +74,30 @@ export interface DiffLine {
   type: 'normal' | 'add' | 'remove';
 }
 
+export type DiffEventStatus = 'pending' | 'resolved';
+export type LineDecision = 'pending' | 'accepted' | 'rejected';
+
+export interface DiffLineDTO {
+  id: string;
+  line_no: number;
+  old_line: string | null;
+  new_line: string | null;
+  decision: LineDecision;
+}
+
+export interface DiffEventDTO {
+  id: string;
+  file_id: string;
+  author: Author;
+  summary?: string;
+  status: DiffEventStatus;
+  old_content: string;
+  new_content: string;
+  created_at: string;
+  resolved_at?: string | null;
+  lines: DiffLineDTO[];
+}
+
 // Context Menu
 export interface ContextMenuState {
   visible: boolean;

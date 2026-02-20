@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Bot, Send, Brain, Loader2, CloudOff, Check } from 'lucide-react';
+import { Bot, Send, Loader2, CloudOff, Check } from 'lucide-react';
 import { PermissionToggle } from '../ui/PermissionToggle';
 import { FileIcon } from '../ui/FileIcon';
 import { Tab, Permission } from '../../types';
 import { useChatStore } from '../../stores/chatStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { api } from '../../api/client';
+import { useWebSocket } from '../../hooks/useWebSocket';
 
 interface SessionViewProps {
   sessionId: string;
@@ -15,7 +16,7 @@ interface SessionViewProps {
 }
 
 export function SessionView({ sessionId, allFiles, permissions, onTogglePermission }: SessionViewProps) {
-  const { getMessagesForSession, loading, error, model, sendMessageForSession, loadSessionMessages } = useChatStore();
+  const { getMessagesForSession, loading, error, sendMessageForSession, loadSessionMessages } = useChatStore();
   const { loadPermissionsFromBackend, isSynced } = useSessionStore();
   const messages = getMessagesForSession(sessionId);
   const [input, setInput] = useState('');
@@ -23,6 +24,8 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
   const [syncing, setSyncing] = useState(false);
   const [syncingFileId, setSyncingFileId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useWebSocket(sessionId);
 
   // Load session messages and permissions when sessionId changes
   useEffect(() => {
@@ -61,12 +64,14 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
     const message = input;
     setInput('');
 
-    const contextFiles = Object.entries(permissions)
-      .filter(([_, perm]) => perm !== 'none')
-      .map(([fileId, _]) => fileId);
+    const contextFiles = allFiles
+      .filter((file) => file.type !== 'session')
+      .filter((file) => (permissions[file.id] || 'read') !== 'none')
+      .map((file) => file.id);
 
     await sendMessageForSession(sessionId, message, contextFiles);
-  }, [input, loading, permissions, sessionId, sendMessageForSession]);
+    window.dispatchEvent(new CustomEvent('assistant-message-finished', { detail: { sessionId } }));
+  }, [allFiles, input, loading, permissions, sessionId, sendMessageForSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -75,27 +80,15 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
     }
   };
 
-  const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    useChatStore.getState().setModel(e.target.value as any);
-  };
-
   return (
     <div className="flex flex-col h-full bg-theme-bg/30">
-      {/* Header with Model Selection */}
+      {/* Header */}
       <div className="bg-theme-bg border-b border-theme-border/20 px-4 py-2 shadow-sm z-10">
         <div className="flex items-center justify-between mb-2">
           <div className="text-xs font-bold text-theme-text/60 uppercase tracking-wider flex items-center gap-2">
             <Bot size={14} /> <span>AI Assistant</span>
           </div>
           <div className="flex items-center gap-2">
-            <select
-              value={model}
-              onChange={handleModelChange}
-              className="text-xs border border-theme-border/30 bg-theme-bg text-theme-text rounded px-2 py-1 focus:outline-none focus:border-theme-border"
-            >
-              <option value="deepseek-chat">DeepSeek Chat</option>
-              <option value="deepseek-reasoner">DeepSeek Reasoner</option>
-            </select>
             {connectionStatus === 'connected' ? (
               <span className="text-xs text-green-500 flex items-center gap-1">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
@@ -135,7 +128,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
           <div className="text-xs text-theme-text/40 italic">No files open.</div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            {allFiles.map((file) => {
+            {allFiles.filter((f) => f.type !== 'session').map((file) => {
               const status = permissions[file.id] || 'read';
               const isFileSyncing = syncingFileId === file.id;
               return (
@@ -182,13 +175,6 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
                 <li>Edit and improve your writing</li>
                 <li>Search across multiple files</li>
               </ul>
-              <p className="mt-2 text-xs text-theme-text/40">
-                {model === 'deepseek-reasoner' && (
-                  <span className="flex items-center gap-1">
-                    <Brain size={12} /> Deep reasoning mode enabled
-                  </span>
-                )}
-              </p>
             </div>
           </div>
         )}

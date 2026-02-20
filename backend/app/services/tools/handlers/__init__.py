@@ -5,14 +5,18 @@ This module initializes and registers all agent tools.
 """
 from app.services.tools.handlers.document_tool import (
     ReadDocumentTool,
-    UpdateDocumentTool,
-    AppendDocumentTool
 )
 from app.services.tools.handlers.editor_ops import (
     UpdateFileTool,
     UpdateBlockTool,
     InsertBlockTool,
     DeleteBlockTool
+)
+from app.services.tools.handlers.pdf_tools import (
+    GetPdfMetadataTool,
+    ReadPdfPagesTool,
+    SearchPdfPassagesTool,
+    ReadVisiblePdfContextTool,
 )
 from app.services.tools.handlers.search_tool import SearchDocumentsTool
 from app.services.tools.registry import register_tools
@@ -28,14 +32,18 @@ def initialize_tools() -> None:
     register_tools(
         # Document tools
         ReadDocumentTool(),
-        UpdateDocumentTool(),
-        AppendDocumentTool(),
 
         # Editor Block Operations
         UpdateFileTool(),
         UpdateBlockTool(),
         InsertBlockTool(),
         DeleteBlockTool(),
+
+        # PDF-specialized tools
+        GetPdfMetadataTool(),
+        ReadPdfPagesTool(),
+        SearchPdfPassagesTool(),
+        ReadVisiblePdfContextTool(),
 
         # Search tools
         SearchDocumentsTool(),
@@ -44,8 +52,6 @@ def initialize_tools() -> None:
 
 __all__ = [
     "ReadDocumentTool",
-    "UpdateDocumentTool",
-    "AppendDocumentTool",
     "SearchDocumentsTool",
     "initialize_tools"
 ]

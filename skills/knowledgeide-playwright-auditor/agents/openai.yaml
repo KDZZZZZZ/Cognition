@@ -1,0 +1,4 @@
+interface:
+  display_name: "KnowledgeIDE E2E Auditor"
+  short_description: "Playwright full-flow audit with fixed report and real/mock LLM modes."
+  default_prompt: "Use $knowledgeide-playwright-auditor to run the full KnowledgeIDE workflow audit, write reports/e2e/full-flow-audit-report.md, and include PDF citation/tool/permission quality checks."

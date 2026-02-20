@@ -2,7 +2,7 @@
  * API Client for Knowledge IDE Backend
  */
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 export const BASE_URL = API_BASE;
 
@@ -19,7 +19,10 @@ export interface FileMetadata {
   size: number;
   created_at: string;
   updated_at: string;
+  page_count?: number;
   url?: string;
+  parent_id?: string | null;
+  children?: FileMetadata[];
 }
 
 export interface DocumentChunk {
@@ -37,6 +40,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   tool_calls?: any[];
+  tool_results?: any[];
+  citations?: any[];
 }
 
 export interface FileVersion {
@@ -48,6 +53,30 @@ export interface FileVersion {
   diff_patch?: string;
   context_snapshot?: string;
   timestamp: string;
+}
+
+export type LineDecision = 'pending' | 'accepted' | 'rejected';
+export type DiffEventStatus = 'pending' | 'resolved';
+
+export interface DiffLineDTO {
+  id: string;
+  line_no: number;
+  old_line: string | null;
+  new_line: string | null;
+  decision: LineDecision;
+}
+
+export interface DiffEventDTO {
+  id: string;
+  file_id: string;
+  author: 'human' | 'agent';
+  summary?: string;
+  status: DiffEventStatus;
+  old_content: string;
+  new_content: string;
+  created_at: string;
+  resolved_at?: string | null;
+  lines: DiffLineDTO[];
 }
 
 class ApiClient {
@@ -80,10 +109,17 @@ class ApiClient {
     return response.json();
   }
 
-  async delete(endpoint: string): Promise<ApiResponse> {
+  async patch(endpoint: string, body: any): Promise<ApiResponse> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: 'DELETE',
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
+    return response.json();
+  }
+
+  async delete(endpoint: string): Promise<ApiResponse> {
+    const response = await fetch(`${this.baseUrl}${endpoint}`, { method: 'DELETE' });
     return response.json();
   }
 
@@ -93,14 +129,28 @@ class ApiClient {
   }
 
   // Files
-  async listFiles(): Promise<ApiResponse<{ files: FileMetadata[] }>> {
-    return this.get('/api/v1/files/');
+  async listFiles(options?: { tree?: boolean; parentId?: string | null }): Promise<ApiResponse<{ files: FileMetadata[]; count: number }>> {
+    const params = new URLSearchParams();
+    if (options?.tree) params.set('tree', 'true');
+    if (options?.parentId !== undefined) {
+      params.set('parent_id', options.parentId === null ? 'root' : options.parentId);
+    }
+    const query = params.toString();
+    return this.get(`/api/v1/files/${query ? `?${query}` : ''}`);
   }
 
-  async uploadFile(file: File): Promise<ApiResponse> {
+  async uploadFile(file: File, parentId?: string | null): Promise<ApiResponse> {
     const formData = new FormData();
     formData.append('file', file);
-    return this.post('/api/v1/files/upload', formData);
+    const query = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : '';
+    return this.post(`/api/v1/files/upload${query}`, formData);
+  }
+
+  async createFolder(name: string, parentId?: string | null): Promise<ApiResponse> {
+    return this.post('/api/v1/files/folders', {
+      name,
+      parent_id: parentId ?? null,
+    });
   }
 
   async getFile(fileId: string): Promise<ApiResponse<FileMetadata>> {
@@ -111,7 +161,13 @@ class ApiClient {
     return this.get(`/api/v1/files/${fileId}/content`);
   }
 
-  async updateFileContent(fileId: string, content: string, author = 'human', summary = 'Content updated', changeType = 'edit'): Promise<ApiResponse<{
+  async updateFileContent(
+    fileId: string,
+    content: string,
+    author = 'human',
+    summary = 'Content updated',
+    changeType = 'edit'
+  ): Promise<ApiResponse<{
     file_id: string;
     size: number;
     updated_at: string;
@@ -122,15 +178,14 @@ class ApiClient {
       content,
       author,
       summary,
-      change_type: changeType
+      change_type: changeType,
     });
   }
 
-  async createFile(filename: string, content = ''): Promise<ApiResponse<{ file_id: string }>> {
-    // Create a File object from the content
+  async createFile(filename: string, content = '', parentId?: string | null): Promise<ApiResponse<{ file_id: string }>> {
     const blob = new Blob([content], { type: 'text/markdown' });
     const file = new File([blob], filename, { type: 'text/markdown' });
-    return this.uploadFile(file);
+    return this.uploadFile(file, parentId);
   }
 
   async downloadFile(fileId: string): Promise<Blob> {
@@ -152,7 +207,36 @@ class ApiClient {
   }
 
   async moveFile(fileId: string, targetParentId?: string | null): Promise<ApiResponse> {
-    return this.post(`/api/v1/files/${fileId}/move`, { new_parent_id: targetParentId });
+    return this.post(`/api/v1/files/${fileId}/move`, { new_parent_id: targetParentId ?? null });
+  }
+
+  // Diff events
+  async createDiffEvent(fileId: string, newContent: string, summary = 'Agent proposed edit', author: 'human' | 'agent' = 'agent') {
+    return this.post(`/api/v1/files/${fileId}/diff-events`, {
+      new_content: newContent,
+      summary,
+      author,
+    });
+  }
+
+  async getPendingDiffEvent(fileId: string): Promise<ApiResponse<{ event: DiffEventDTO | null }>> {
+    return this.get(`/api/v1/files/${fileId}/diff-events/pending`);
+  }
+
+  async updateDiffLineDecision(fileId: string, eventId: string, lineId: string, decision: LineDecision) {
+    return this.patch(`/api/v1/files/${fileId}/diff-events/${eventId}/lines/${lineId}`, { decision });
+  }
+
+  async finalizeDiffEvent(
+    fileId: string,
+    eventId: string,
+    payload?: { finalContent?: string; summary?: string; author?: 'human' | 'agent' }
+  ) {
+    return this.post(`/api/v1/files/${fileId}/diff-events/${eventId}/finalize`, {
+      final_content: payload?.finalContent,
+      summary: payload?.summary,
+      author: payload?.author || 'human',
+    });
   }
 
   // Chat
@@ -160,7 +244,7 @@ class ApiClient {
     sessionId: string,
     message: string,
     contextFiles: string[] = [],
-    model = 'deepseek-chat',
+    model = 'qwen-plus',
     useTools = true,
     permissions?: Record<string, 'read' | 'write' | 'none'>
   ): Promise<ApiResponse> {
@@ -170,7 +254,7 @@ class ApiClient {
       context_files: contextFiles,
       model,
       use_tools: useTools,
-      permissions,  // Include permissions to initialize/update session
+      permissions,
     });
   }
 
@@ -205,7 +289,8 @@ class ApiClient {
       file_id: fileId,
       page,
       scroll_y: scrollY,
-      scroll_height: scrollHeight,
+      visible_range_start: Math.max(0, Math.floor(scrollY)),
+      visible_range_end: Math.max(0, Math.floor(scrollY + scrollHeight)),
     });
   }
 

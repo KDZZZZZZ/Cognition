@@ -26,7 +26,6 @@ export function PermissionToggle({ status, onClick, syncing = false }: Permissio
   };
 
   const getLabel = () => {
-    if (syncing) return 'Syncing...';
     switch (status) {
       case 'read':
         return 'Read permission';

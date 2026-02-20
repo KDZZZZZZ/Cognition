@@ -30,14 +30,20 @@ class Settings(BaseSettings):
 
     # AI/LLM
     OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     ANTHROPIC_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEFAULT_MODEL: str = "deepseek-chat"
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    DEFAULT_MODEL: str = "qwen-plus"
+    EMBEDDING_MODEL: str = "text-embedding-v3"
 
     # Available Models
     AVAILABLE_MODELS: dict = {
+        "qwen-plus": {"provider": "openai_compatible", "thinking": False},
+        "qwen-max": {"provider": "openai_compatible", "thinking": False},
+        "qwen-turbo": {"provider": "openai_compatible", "thinking": False},
+        "text-embedding-v3": {"provider": "openai_compatible", "thinking": False},
+        # Backward compatibility for existing deployments
         "deepseek-chat": {"provider": "deepseek", "thinking": False},
         "deepseek-reasoner": {"provider": "deepseek", "thinking": True},
         "gpt-4o-mini": {"provider": "openai", "thinking": False},
@@ -49,7 +55,12 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = "chroma_db"
 
     # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174"]
+    CORS_ORIGINS: list[str] = [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ]
 
     # WebSocket
     WS_HEARTBEAT_INTERVAL: int = 30

@@ -9,11 +9,11 @@ interface ChatState {
   loading: boolean;
   error: string | null;
   sessionId: string;
-  model: 'deepseek-chat' | 'deepseek-reasoner';
+  model: string;
 
   // Actions
   setSessionId: (sessionId: string) => void;
-  setModel: (model: 'deepseek-chat' | 'deepseek-reasoner') => void;
+  setModel: (model: string) => void;
   sendMessage: (message: string, contextFiles: string[]) => Promise<void>;
   sendMessageForSession: (sessionId: string, message: string, contextFiles: string[]) => Promise<void>;
   clearMessages: () => void;
@@ -30,7 +30,7 @@ export const useChatStore = create<ChatState>()(
       loading: false,
       error: null,
       sessionId: 'default-session',
-      model: 'deepseek-chat',
+      model: 'qwen-plus',
 
       setSessionId: (sessionId) => set({ sessionId }),
 

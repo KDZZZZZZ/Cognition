@@ -104,7 +104,7 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
               <div className={`p-4 ${
                 row.type === 'delete' ? 'bg-red-50' :
                 row.type === 'modify' ? 'bg-yellow-50/50' : ''
-              }`}>
+              } ${row.type === 'delete' ? 'diff-deletion' : ''}`}>
                 {row.left.map((block, i) => (
                   <div key={i} className="mb-4 last:mb-0">
                     <MarkdownContent content={block} className={row.type === 'delete' ? 'opacity-70' : ''} />
@@ -116,7 +116,7 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
               <div className={`p-4 ${
                 row.type === 'add' ? 'bg-green-50' :
                 row.type === 'modify' ? 'bg-yellow-50/50' : ''
-              }`}>
+              } ${row.type === 'add' ? 'diff-addition' : ''}`}>
                 {row.right.map((block, i) => (
                   <div key={i} className="mb-4 last:mb-0">
                     <MarkdownContent content={block} />
@@ -154,7 +154,7 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
           return (
             <div key={index} className="flex flex-col gap-2">
               {part.value.map((blockContent, i) => (
-                <div key={i} className={`relative p-4 rounded-lg border-2 ${bgClass} ${borderClass} transition-colors`}>
+                <div key={i} className={`relative p-4 rounded-lg border-2 ${bgClass} ${borderClass} transition-colors ${part.added ? 'diff-addition' : ''} ${part.removed ? 'diff-deletion' : ''}`}>
                   {label}
                   <MarkdownContent
                     content={blockContent}

@@ -21,6 +21,17 @@ class ChangeType(str, enum.Enum):
     CREATE = "create"
 
 
+class DiffEventStatus(str, enum.Enum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
+class LineDecision(str, enum.Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
 class FileType(str, enum.Enum):
     FOLDER = "folder"
     MD = "md"
@@ -41,7 +52,7 @@ class File(Base):
     path: Mapped[str] = mapped_column(String(500), nullable=False)
     size: Mapped[int] = mapped_column(Integer, default=0)
     page_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    meta: Mapped[dict] = mapped_column(JSON, default={})  # Renamed from 'metadata' to avoid SQLAlchemy conflict
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)  # Renamed from 'metadata' to avoid SQLAlchemy conflict
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -57,6 +68,9 @@ class File(Base):
     # Relationship to versions
     versions: Mapped[List["Version"]] = relationship(
         "Version", back_populates="file", cascade="all, delete-orphan", lazy="dynamic"
+    )
+    diff_events: Mapped[List["DiffEvent"]] = relationship(
+        "DiffEvent", back_populates="file", cascade="all, delete-orphan"
     )
 
 
@@ -89,12 +103,54 @@ class Version(Base):
     file: Mapped["File"] = relationship("File", back_populates="versions")
 
 
+class DiffEvent(Base):
+    __tablename__ = "diff_events"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    file_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    author: Mapped[Author] = mapped_column(SQLEnum(Author), nullable=False, default=Author.AGENT)
+    old_content: Mapped[str] = mapped_column(Text, nullable=False)
+    new_content: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    status: Mapped[DiffEventStatus] = mapped_column(
+        SQLEnum(DiffEventStatus), nullable=False, default=DiffEventStatus.PENDING, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    file: Mapped["File"] = relationship("File", back_populates="diff_events")
+    lines: Mapped[List["DiffLineSnapshot"]] = relationship(
+        "DiffLineSnapshot", back_populates="event", cascade="all, delete-orphan"
+    )
+
+
+class DiffLineSnapshot(Base):
+    __tablename__ = "diff_line_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("diff_events.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    line_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    old_line: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    new_line: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decision: Mapped[LineDecision] = mapped_column(
+        SQLEnum(LineDecision), nullable=False, default=LineDecision.PENDING, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    event: Mapped["DiffEvent"] = relationship("DiffEvent", back_populates="lines")
+
+
 class Session(Base):
     __tablename__ = "sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    permissions: Mapped[dict] = mapped_column(JSON, default={})
+    permissions: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

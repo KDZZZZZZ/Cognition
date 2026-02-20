@@ -13,8 +13,7 @@ from datetime import datetime
 
 from app.database import get_db
 from app.models import Session, File as FileModel
-from app.schemas import APIResponse
-from app.services.tools.middleware import permission_middleware
+from app.schemas import APIResponse, ViewportUpdateRequest
 
 router = APIRouter(prefix="/viewport", tags=["viewport"])
 
@@ -26,12 +25,7 @@ _viewport_store: dict = {}
 
 @router.post("/update", response_model=APIResponse)
 async def update_viewport(
-    session_id: str,
-    file_id: str,
-    page: int = 1,
-    scroll_y: float = 0,
-    visible_range_start: int = 0,
-    visible_range_end: int = 0,
+    payload: ViewportUpdateRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -49,6 +43,13 @@ async def update_viewport(
         visible_range_end: End line/paragraph index of visible content
     """
     # Validate session exists
+    session_id = payload.session_id
+    file_id = payload.file_id
+    page = payload.page
+    scroll_y = payload.scroll_y
+    visible_range_start = payload.visible_range_start
+    visible_range_end = payload.visible_range_end
+
     result = await db.execute(select(Session).where(Session.id == session_id))
     session = result.scalar_one_or_none()
 
@@ -74,15 +75,6 @@ async def update_viewport(
         "scroll_y": scroll_y,
         "visible_range": [visible_range_start, visible_range_end],
         "timestamp": datetime.utcnow().isoformat()
-    }
-
-    # Update session's active viewport context
-    # This will be used when building LLM context
-    session.permissions = session.permissions or {}
-    session.permissions["_active_viewport"] = {
-        "file_id": file_id,
-        "page": page,
-        "visible_range": [visible_range_start, visible_range_end]
     }
 
     return APIResponse(

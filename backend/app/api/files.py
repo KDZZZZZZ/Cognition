@@ -1,21 +1,104 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+import difflib
 import uuid
-import aiofiles
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
+import aiofiles
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import desc, select
+
 from app.database import get_db
-from app.models import File as FileModel, DocumentChunk, Version, Author, ChangeType
-from app.schemas import APIResponse, FileMetadata, FileUpdate
+from app.models import (
+    Author,
+    ChangeType,
+    DiffEvent,
+    DiffEventStatus,
+    DiffLineSnapshot,
+    DocumentChunk,
+    File as FileModel,
+    LineDecision,
+    Version,
+)
+from app.schemas import (
+    APIResponse,
+    DiffEventCreateRequest,
+    DiffEventFinalizeRequest,
+    DiffLineUpdateRequest,
+    FileMetadata,
+    FileUpdate,
+    FolderCreateRequest,
+    MoveFileRequest,
+)
 from app.services.document_parser import parser
-from app.services.vector_store import vector_store
 from app.services.llm_service import llm_service
+from app.services.vector_store import vector_store
 from app.config import settings
 
 router = APIRouter(prefix="/files", tags=["files"])
+
+
+def _build_diff_line_snapshots(old_content: str, new_content: str) -> list[dict]:
+    """
+    Build line-level snapshots from a before/after string pair.
+
+    We keep one row per line index to support deterministic line approval.
+    """
+    old_lines = old_content.splitlines()
+    new_lines = new_content.splitlines()
+    max_len = max(len(old_lines), len(new_lines))
+
+    snapshots: list[dict] = []
+    for idx in range(max_len):
+        old_line = old_lines[idx] if idx < len(old_lines) else None
+        new_line = new_lines[idx] if idx < len(new_lines) else None
+        decision = LineDecision.PENDING if old_line != new_line else LineDecision.ACCEPTED
+        snapshots.append(
+            {
+                "line_no": idx + 1,
+                "old_line": old_line,
+                "new_line": new_line,
+                "decision": decision,
+            }
+        )
+    return snapshots
+
+
+def _compose_content_from_line_snapshots(snapshots: list[DiffLineSnapshot]) -> str:
+    """
+    Compose finalized content from line decisions.
+
+    accepted -> new_line
+    rejected -> old_line
+    pending  -> new_line (finalize should normally resolve pending first)
+    """
+    ordered = sorted(snapshots, key=lambda line: line.line_no)
+    final_lines: list[str] = []
+    for line in ordered:
+        if line.decision == LineDecision.REJECTED:
+            chosen = line.old_line
+        else:
+            chosen = line.new_line
+        if chosen is not None:
+            final_lines.append(chosen)
+    return "\n".join(final_lines)
+
+
+def _build_unified_diff(old_content: str, new_content: str) -> str:
+    if old_content == new_content:
+        return ""
+    old_lines = old_content.splitlines(keepends=True)
+    new_lines = new_content.splitlines(keepends=True)
+    return "".join(
+        difflib.unified_diff(
+            old_lines,
+            new_lines,
+            fromfile="old",
+            tofile="new",
+            lineterm="",
+        )
+    )
 
 
 @router.post("/upload", response_model=APIResponse)
@@ -93,7 +176,7 @@ async def upload_file(
     # Parse document
     chunks, metadata = await parser.parse_file(str(upload_path), file_id, file_type)
 
-    # Create file record
+    # Create file record first and flush to avoid FK ordering issues on chunks insert.
     db_file = FileModel(
         id=file_id,
         name=file.filename,
@@ -105,27 +188,23 @@ async def upload_file(
         parent_id=parent_id
     )
     db.add(db_file)
+    await db.flush()
 
     # Calculate public URL
     public_url = f"/uploads/{upload_path.name}"
 
     # Save chunks and generate embeddings
     if chunks:
-        # Save chunks to database
         for chunk in chunks:
             db.add(chunk)
-
         await db.flush()
 
-        # Generate embeddings for chunks
+        # Best effort embedding build; hard-fail is not allowed.
         try:
             chunk_texts = [chunk.content for chunk in chunks]
             embeddings = await llm_service.get_embeddings_batch(chunk_texts)
-
-            # Add to vector store
             await vector_store.add_chunks(chunks, embeddings)
         except Exception as e:
-            # Continue without embeddings if AI service is not configured
             print(f"Warning: Could not generate embeddings: {e}")
 
     await db.commit()
@@ -147,8 +226,7 @@ async def upload_file(
 
 @router.post("/folders", response_model=APIResponse)
 async def create_folder(
-    name: str,
-    parent_id: Optional[str] = None,
+    request: FolderCreateRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -157,6 +235,12 @@ async def create_folder(
     Folders are stored in the database and support hierarchical organization.
     """
     # Validate parent_id if provided
+    name = request.name.strip()
+    parent_id = request.parent_id
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name cannot be empty")
+
     if parent_id:
         parent_result = await db.execute(
             select(FileModel).where(FileModel.id == parent_id, FileModel.file_type == "folder")
@@ -413,7 +497,6 @@ async def get_file_versions(
         raise HTTPException(status_code=404, detail="File not found")
 
     # Get versions
-    from sqlalchemy import desc
     query = (
         select(Version)
         .where(Version.file_id == file_id)
@@ -449,10 +532,268 @@ async def get_file_versions(
     )
 
 
+@router.post("/{file_id}/diff-events", response_model=APIResponse)
+async def create_diff_event(
+    file_id: str,
+    request: DiffEventCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a pending diff event (agent/user proposal) without mutating file content."""
+    result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    file = result.scalar_one_or_none()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if file.file_type.value not in ["md", "txt", "code"]:
+        raise HTTPException(status_code=400, detail="Diff events are only supported for text files")
+
+    file_path = Path(file.path)
+    old_content = ""
+    if file_path.exists():
+        try:
+            old_content = file_path.read_text(encoding="utf-8")
+        except Exception:
+            old_content = ""
+
+    if old_content == request.new_content:
+        return APIResponse(
+            success=True,
+            data={
+                "event_id": None,
+                "file_id": file_id,
+                "status": "noop",
+                "message": "No content change detected",
+            },
+        )
+
+    event = DiffEvent(
+        id=str(uuid.uuid4()),
+        file_id=file_id,
+        author=request.author,
+        old_content=old_content,
+        new_content=request.new_content,
+        summary=request.summary,
+        status=DiffEventStatus.PENDING,
+    )
+    db.add(event)
+    await db.flush()
+
+    snapshots = _build_diff_line_snapshots(old_content, request.new_content)
+    created_lines: list[dict] = []
+    for item in snapshots:
+        line = DiffLineSnapshot(
+            id=str(uuid.uuid4()),
+            event_id=event.id,
+            line_no=item["line_no"],
+            old_line=item["old_line"],
+            new_line=item["new_line"],
+            decision=item["decision"],
+        )
+        db.add(line)
+        created_lines.append(
+            {
+                "id": line.id,
+                "line_no": line.line_no,
+                "old_line": line.old_line,
+                "new_line": line.new_line,
+                "decision": line.decision.value,
+            }
+        )
+
+    await db.commit()
+
+    return APIResponse(
+        success=True,
+        data={
+            "event_id": event.id,
+            "file_id": file_id,
+            "status": event.status.value,
+            "summary": event.summary,
+            "created_at": event.created_at.isoformat(),
+            "lines": created_lines,
+        },
+    )
+
+
+@router.get("/{file_id}/diff-events/pending", response_model=APIResponse)
+async def get_pending_diff_event(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the latest pending diff event for a file."""
+    result = await db.execute(
+        select(DiffEvent)
+        .where(DiffEvent.file_id == file_id, DiffEvent.status == DiffEventStatus.PENDING)
+        .order_by(desc(DiffEvent.created_at))
+        .limit(1)
+    )
+    event = result.scalar_one_or_none()
+    if not event:
+        return APIResponse(success=True, data={"event": None})
+
+    lines_result = await db.execute(
+        select(DiffLineSnapshot)
+        .where(DiffLineSnapshot.event_id == event.id)
+        .order_by(DiffLineSnapshot.line_no)
+    )
+    lines = lines_result.scalars().all()
+
+    return APIResponse(
+        success=True,
+        data={
+            "event": {
+                "id": event.id,
+                "file_id": event.file_id,
+                "author": event.author.value,
+                "summary": event.summary,
+                "status": event.status.value,
+                "old_content": event.old_content,
+                "new_content": event.new_content,
+                "created_at": event.created_at.isoformat(),
+                "resolved_at": event.resolved_at.isoformat() if event.resolved_at else None,
+                "lines": [
+                    {
+                        "id": line.id,
+                        "line_no": line.line_no,
+                        "old_line": line.old_line,
+                        "new_line": line.new_line,
+                        "decision": line.decision.value,
+                    }
+                    for line in lines
+                ],
+            }
+        },
+    )
+
+
+@router.patch("/{file_id}/diff-events/{event_id}/lines/{line_id}", response_model=APIResponse)
+async def update_diff_line_decision(
+    file_id: str,
+    event_id: str,
+    line_id: str,
+    request: DiffLineUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update decision for one line inside a pending diff event."""
+    event_result = await db.execute(
+        select(DiffEvent).where(
+            DiffEvent.id == event_id,
+            DiffEvent.file_id == file_id,
+            DiffEvent.status == DiffEventStatus.PENDING,
+        )
+    )
+    event = event_result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Pending diff event not found")
+
+    line_result = await db.execute(
+        select(DiffLineSnapshot).where(
+            DiffLineSnapshot.id == line_id,
+            DiffLineSnapshot.event_id == event_id,
+        )
+    )
+    line = line_result.scalar_one_or_none()
+    if not line:
+        raise HTTPException(status_code=404, detail="Diff line not found")
+
+    line.decision = request.decision
+    line.resolved_at = datetime.utcnow() if request.decision != LineDecision.PENDING else None
+    await db.commit()
+
+    return APIResponse(
+        success=True,
+        data={
+            "event_id": event_id,
+            "line_id": line_id,
+            "decision": line.decision.value,
+        },
+    )
+
+
+@router.post("/{file_id}/diff-events/{event_id}/finalize", response_model=APIResponse)
+async def finalize_diff_event(
+    file_id: str,
+    event_id: str,
+    request: DiffEventFinalizeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Finalize pending diff event, write file content, and create a formal version record."""
+    file_result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    file = file_result.scalar_one_or_none()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    event_result = await db.execute(
+        select(DiffEvent).where(
+            DiffEvent.id == event_id,
+            DiffEvent.file_id == file_id,
+            DiffEvent.status == DiffEventStatus.PENDING,
+        )
+    )
+    event = event_result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Pending diff event not found")
+
+    lines_result = await db.execute(
+        select(DiffLineSnapshot)
+        .where(DiffLineSnapshot.event_id == event_id)
+        .order_by(DiffLineSnapshot.line_no)
+    )
+    lines = lines_result.scalars().all()
+
+    final_content = request.final_content
+    if final_content is None:
+        final_content = _compose_content_from_line_snapshots(lines)
+
+    file_path = Path(file.path)
+    if not file_path.exists():
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
+        await f.write(final_content)
+
+    file.size = len(final_content.encode("utf-8"))
+    file.updated_at = datetime.utcnow()
+
+    for line in lines:
+        if line.decision == LineDecision.PENDING:
+            line.decision = LineDecision.ACCEPTED
+            line.resolved_at = datetime.utcnow()
+
+    version = Version(
+        id=str(uuid.uuid4()),
+        file_id=file_id,
+        author=request.author,
+        change_type=ChangeType.EDIT,
+        summary=request.summary or "Finalize diff event",
+        diff_patch=_build_unified_diff(event.old_content, final_content),
+        context_snapshot=event.old_content,
+    )
+    db.add(version)
+
+    event.status = DiffEventStatus.RESOLVED
+    event.resolved_at = datetime.utcnow()
+    event.new_content = final_content
+
+    await db.commit()
+
+    return APIResponse(
+        success=True,
+        data={
+            "event_id": event.id,
+            "file_id": file_id,
+            "status": event.status.value,
+            "version_id": version.id,
+            "final_content": final_content,
+            "resolved_at": event.resolved_at.isoformat() if event.resolved_at else None,
+        },
+    )
+
+
 @router.post("/{file_id}/move", response_model=APIResponse)
 async def move_file(
     file_id: str,
-    new_parent_id: Optional[str] = None,
+    request: MoveFileRequest,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -462,6 +803,8 @@ async def move_file(
         file_id: The ID of the file/folder to move
         new_parent_id: The ID of the new parent folder. Use null/root for root level.
     """
+    new_parent_id = request.new_parent_id
+
     result = await db.execute(select(FileModel).where(FileModel.id == file_id))
     file = result.scalar_one_or_none()
 

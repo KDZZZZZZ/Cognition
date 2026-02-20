@@ -37,6 +37,17 @@ class ChangeType(str, Enum):
     CREATE = "create"
 
 
+class DiffEventStatus(str, Enum):
+    PENDING = "pending"
+    RESOLVED = "resolved"
+
+
+class LineDecision(str, Enum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
 # Request Models
 class FileUploadRequest(BaseModel):
     filename: str
@@ -56,6 +67,15 @@ class ViewportUpdate(BaseModel):
     visible_range: tuple[int, int]
 
 
+class ViewportUpdateRequest(BaseModel):
+    session_id: str
+    file_id: str
+    page: int = 1
+    scroll_y: float = 0
+    visible_range_start: int = 0
+    visible_range_end: int = 0
+
+
 class ChatMessage(BaseModel):
     role: str
     content: str
@@ -67,6 +87,8 @@ class ChatRequest(BaseModel):
     message: str
     context_files: list[str] = []
     viewport_context: Optional[str] = None
+    model: Optional[str] = None
+    use_tools: bool = True
     permissions: Optional[dict[str, str]] = None  # Initial permissions for new sessions
 
 
@@ -89,6 +111,26 @@ class FileUpdate(BaseModel):
     change_type: ChangeType = ChangeType.EDIT
     summary: str = "Content updated"
     context_snapshot: Optional[str] = None  # Optional context about what triggered the change
+
+
+class MoveFileRequest(BaseModel):
+    new_parent_id: Optional[str] = None
+
+
+class DiffEventCreateRequest(BaseModel):
+    new_content: str
+    summary: Optional[str] = "Agent proposed edit"
+    author: Author = Author.AGENT
+
+
+class DiffLineUpdateRequest(BaseModel):
+    decision: LineDecision
+
+
+class DiffEventFinalizeRequest(BaseModel):
+    final_content: Optional[str] = None
+    summary: Optional[str] = "Finalize diff event"
+    author: Author = Author.HUMAN
 
 
 # Response Models

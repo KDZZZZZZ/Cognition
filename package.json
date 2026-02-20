@@ -8,7 +8,9 @@
     "server": "cd backend && uvicorn main:app --reload --port 8000",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e:audit": "node skills/knowledgeide-playwright-auditor/scripts/run-flow-audit.mjs",
+    "e2e:audit:spec": "playwright test e2e-tests/full-flow-audit.spec.ts --config=playwright.config.ts"
   },
   "dependencies": {
     "@aarkue/tiptap-math-extension": "^1.4.0",
@@ -44,6 +46,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/typography": "^0.5.19",
     "@types/katex": "^0.16.8",
     "@types/react": "^18.3.18",

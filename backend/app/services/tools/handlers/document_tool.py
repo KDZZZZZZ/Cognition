@@ -81,8 +81,14 @@ class ReadDocumentTool(BaseTool):
             if file.file_type in ("md", "txt"):
                 content = file_path.read_text(encoding="utf-8")
             elif file.file_type == "pdf":
-                # For PDF, return stored text content from metadata
-                content = file.meta.get("text_content", "[PDF content not available]") if file.meta else "[PDF content not available]"
+                from app.models import DocumentChunk
+                chunk_rows = await context.db.execute(
+                    select(DocumentChunk)
+                    .where(DocumentChunk.file_id == file_id)
+                    .order_by(DocumentChunk.page, DocumentChunk.chunk_index)
+                )
+                chunks = chunk_rows.scalars().all()
+                content = "\n".join(chunk.content for chunk in chunks) if chunks else "[PDF content not available]"
             elif file.file_type == "docx":
                 content = file.meta.get("text_content", "[DOCX content not available]") if file.meta else "[DOCX content not available]"
             else:
@@ -93,7 +99,7 @@ class ReadDocumentTool(BaseTool):
                 data={
                     "file_id": file_id,
                     "file_name": file.name,
-                    "file_type": file.file_type,
+                    "file_type": file.file_type.value if hasattr(file.file_type, "value") else file.file_type,
                     "content": content,
                     "size": file.size
                 }

@@ -1,410 +1,344 @@
-from typing import Dict, Any, Optional
-import os
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 from sqlalchemy import select
-from app.services.tools.base import BaseTool, ToolContext, ToolResult, PermissionLevel, ToolValidationError
-from app.models import File, FileType, Version, ChangeType
+
+from app.models import Author, DiffEvent, DiffEventStatus, DiffLineSnapshot, File, FileType, LineDecision
+from app.services.tools.base import BaseTool, PermissionLevel, ToolContext, ToolResult, ToolValidationError
+from app.websocket import manager
+
+
+def _build_line_snapshots(old_content: str, new_content: str) -> List[Dict[str, Any]]:
+    old_lines = old_content.splitlines()
+    new_lines = new_content.splitlines()
+    max_len = max(len(old_lines), len(new_lines))
+
+    snapshots = []
+    for i in range(max_len):
+        old_line = old_lines[i] if i < len(old_lines) else None
+        new_line = new_lines[i] if i < len(new_lines) else None
+        decision = LineDecision.PENDING if old_line != new_line else LineDecision.ACCEPTED
+        snapshots.append(
+            {
+                "line_no": i + 1,
+                "old_line": old_line,
+                "new_line": new_line,
+                "decision": decision,
+            }
+        )
+    return snapshots
+
+
+async def _create_pending_diff_event(
+    context: ToolContext,
+    file: File,
+    old_content: str,
+    new_content: str,
+    summary: str,
+) -> ToolResult:
+    if old_content == new_content:
+        return ToolResult(
+            success=True,
+            data={
+                "file_id": file.id,
+                "file_name": file.name,
+                "event_id": None,
+                "status": "noop",
+                "message": "No content changes detected",
+            },
+        )
+
+    event = DiffEvent(
+        id=str(uuid.uuid4()),
+        file_id=file.id,
+        author=Author.AGENT,
+        old_content=old_content,
+        new_content=new_content,
+        summary=summary,
+        status=DiffEventStatus.PENDING,
+    )
+    context.db.add(event)
+    await context.db.flush()
+
+    for snapshot in _build_line_snapshots(old_content, new_content):
+        context.db.add(
+            DiffLineSnapshot(
+                id=str(uuid.uuid4()),
+                event_id=event.id,
+                line_no=snapshot["line_no"],
+                old_line=snapshot["old_line"],
+                new_line=snapshot["new_line"],
+                decision=snapshot["decision"],
+            )
+        )
+
+    await context.db.commit()
+
+    await manager.broadcast_to_session(
+        context.session_id,
+        {
+            "type": "diff_event_created",
+            "data": {
+                "file_id": file.id,
+                "event_id": event.id,
+                "summary": summary,
+            },
+        },
+    )
+
+    return ToolResult(
+        success=True,
+        data={
+            "file_id": file.id,
+            "file_name": file.name,
+            "event_id": event.id,
+            "status": "pending",
+            "summary": summary,
+        },
+    )
+
+
+async def _load_file(context: ToolContext, file_id: str) -> Optional[File]:
+    result = await context.db.execute(select(File).where(File.id == file_id))
+    return result.scalar_one_or_none()
+
+
+def _read_text(path: str) -> str:
+    file_path = Path(path)
+    if not file_path.exists():
+        return ""
+    return file_path.read_text(encoding="utf-8")
+
 
 class UpdateFileTool(BaseTool):
-    """
-    Tool to update the entire content of a file.
-    """
-    name = "update_file"
-    description = "Update the entire content of a file. Use this when you want to rewrite a file completely or apply significant changes."
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "file_id": {
-                "type": "string",
-                "description": "The ID of the file to update"
+    @property
+    def name(self) -> str:
+        return "update_file"
+
+    @property
+    def description(self) -> str:
+        return "Propose a full-file rewrite for markdown/text files. This creates a pending diff event for user approval."
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string", "description": "Target file ID"},
+                "content": {"type": "string", "description": "Proposed full file content"},
+                "summary": {"type": "string", "description": "Short change summary"},
             },
-            "content": {
-                "type": "string",
-                "description": "The new full content of the file"
-            },
-            "summary": {
-                "type": "string",
-                "description": "A short summary of the changes made (for version history)"
-            }
-        },
-        "required": ["file_id", "content", "summary"]
-    }
-    required_permission = PermissionLevel.WRITE
-    writable_only = True
+            "required": ["file_id", "content", "summary"],
+        }
 
-    async def execute(self, context: ToolContext, **kwargs) -> ToolResult:
-        file_id = kwargs.get("file_id")
-        content = kwargs.get("content")
-        summary = kwargs.get("summary")
+    @property
+    def required_permission(self) -> PermissionLevel:
+        return PermissionLevel.WRITE
 
-        # 1. Get file from DB
-        stmt = select(File).where(File.id == file_id)
-        result = await context.db.execute(stmt)
-        file_record = result.scalar_one_or_none()
+    @property
+    def writable_only(self) -> bool:
+        return True
 
-        if not file_record:
-            return ToolResult(success=False, error=f"File {file_id} not found")
+    async def execute(self, arguments: Dict[str, Any], context: ToolContext) -> ToolResult:
+        file_id = arguments["file_id"]
+        new_content = arguments["content"]
+        summary = arguments["summary"]
 
-        # 2. Check if file is writable (text based)
-        if file_record.file_type not in [FileType.MD, FileType.TXT, FileType.CODE]:
-             return ToolResult(success=False, error=f"Cannot edit file type: {file_record.file_type}")
+        file = await _load_file(context, file_id)
+        if not file:
+            return ToolResult(success=False, error=f"File {file_id} not found", error_code="FILE_NOT_FOUND")
 
-        # 3. Read old content for diff (simple version)
-        old_content = ""
-        try:
-            if os.path.exists(file_record.path):
-                with open(file_record.path, "r", encoding="utf-8") as f:
-                    old_content = f.read()
-        except Exception:
-            pass # File might be new or unreadable
+        if file.file_type not in [FileType.MD, FileType.TXT, FileType.CODE]:
+            return ToolResult(
+                success=False,
+                error=f"Cannot edit file type: {file.file_type}",
+                error_code="FILE_NOT_WRITABLE",
+            )
 
-        # 4. Write new content
-        try:
-            with open(file_record.path, "w", encoding="utf-8") as f:
-                f.write(content)
-        except Exception as e:
-             return ToolResult(success=False, error=f"Failed to write to file: {str(e)}")
+        old_content = _read_text(file.path)
+        return await _create_pending_diff_event(context, file, old_content, new_content, summary)
 
-        # 5. Create Version record
-        # Note: In a real implementation, we would generate a proper diff here
-        # For now, we'll store a simple record
-        version = Version(
-            file_id=file_id,
-            author="agent",
-            change_type=ChangeType.EDIT,
-            summary=summary,
-            diff_patch="Diff generation not implemented in tool yet", # Placeholder
-            # context_snapshot=... # Could capture viewport here if available
-        )
-        context.db.add(version)
-        await context.db.commit()
-
-        # Broadcast file update event
-        from app.websocket import manager
-        await manager.broadcast_to_session(
-            context.session_id,
-            {
-                "type": "file_update",
-                "data": {
-                    "file_id": file_id,
-                    "version_id": version.id,
-                    "content": content,
-                    "summary": summary,
-                    "author": "agent"
-                }
-            }
-        )
-
-        return ToolResult(
-            success=True,
-            data={
-                "file_id": file_id,
-                "version_id": version.id,
-                "message": f"File updated successfully. Version {version.id} created."
-            }
-        )
 
 class UpdateBlockTool(BaseTool):
-    """
-    Tool to update a specific block of text in a Markdown file.
-    Blocks are currently defined as paragraphs separated by double newlines.
-    """
-    name = "update_block"
-    description = "Update a specific block (paragraph) in a Markdown file. Blocks are 0-indexed."
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "file_id": {
-                "type": "string",
-                "description": "The ID of the file to update"
+    @property
+    def name(self) -> str:
+        return "update_block"
+
+    @property
+    def description(self) -> str:
+        return "Propose updating one paragraph block in a markdown file (0-indexed blocks split by blank lines)."
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string", "description": "Target markdown file ID"},
+                "block_index": {"type": "integer", "description": "0-based block index"},
+                "content": {"type": "string", "description": "New block content"},
+                "summary": {"type": "string", "description": "Short change summary"},
             },
-            "block_index": {
-                "type": "integer",
-                "description": "The index of the block to update (0-based)"
-            },
-            "content": {
-                "type": "string",
-                "description": "The new content for the block"
-            },
-            "summary": {
-                "type": "string",
-                "description": "A short summary of the changes"
-            }
-        },
-        "required": ["file_id", "block_index", "content", "summary"]
-    }
-    required_permission = PermissionLevel.WRITE
-    writable_only = True
+            "required": ["file_id", "block_index", "content", "summary"],
+        }
 
-    async def execute(self, context: ToolContext, **kwargs) -> ToolResult:
-        file_id = kwargs.get("file_id")
-        block_index = kwargs.get("block_index")
-        content = kwargs.get("content")
-        summary = kwargs.get("summary")
+    @property
+    def required_permission(self) -> PermissionLevel:
+        return PermissionLevel.WRITE
 
-        # 1. Get file
-        stmt = select(File).where(File.id == file_id)
-        result = await context.db.execute(stmt)
-        file_record = result.scalar_one_or_none()
+    @property
+    def writable_only(self) -> bool:
+        return True
 
-        if not file_record:
-            return ToolResult(success=False, error=f"File {file_id} not found")
+    async def execute(self, arguments: Dict[str, Any], context: ToolContext) -> ToolResult:
+        file_id = arguments["file_id"]
+        block_index = arguments["block_index"]
+        content = arguments["content"]
+        summary = arguments["summary"]
 
-        if file_record.file_type != FileType.MD:
-             return ToolResult(success=False, error="Block updates only supported for Markdown files")
+        if block_index < 0:
+            raise ToolValidationError(self.name, "block_index", "Must be >= 0")
 
-        # 2. Read and split content
-        try:
-            with open(file_record.path, "r", encoding="utf-8") as f:
-                full_content = f.read()
-        except Exception as e:
-            return ToolResult(success=False, error=f"Failed to read file: {str(e)}")
+        file = await _load_file(context, file_id)
+        if not file:
+            return ToolResult(success=False, error=f"File {file_id} not found", error_code="FILE_NOT_FOUND")
+        if file.file_type != FileType.MD:
+            return ToolResult(
+                success=False,
+                error="Block updates are only supported for markdown files",
+                error_code="FILE_NOT_WRITABLE",
+            )
 
-        # Simple block splitting by double newlines
-        # This is a naive implementation; a real AST parser would be better
-        blocks = full_content.split("\n\n")
-
-        if block_index < 0 or block_index >= len(blocks):
-            return ToolResult(success=False, error=f"Block index {block_index} out of range (0-{len(blocks)-1})")
-
-        # 3. Update block
+        old_content = _read_text(file.path)
+        blocks = old_content.split("\n\n") if old_content else [""]
+        if block_index >= len(blocks):
+            return ToolResult(
+                success=False,
+                error=f"Block index {block_index} out of range (0-{len(blocks)-1})",
+                error_code="INVALID_BLOCK_INDEX",
+            )
         blocks[block_index] = content
-        new_full_content = "\n\n".join(blocks)
+        new_content = "\n\n".join(blocks)
+        return await _create_pending_diff_event(context, file, old_content, new_content, summary)
 
-        # 4. Write back
-        try:
-            with open(file_record.path, "w", encoding="utf-8") as f:
-                f.write(new_full_content)
-        except Exception as e:
-            return ToolResult(success=False, error=f"Failed to write to file: {str(e)}")
-
-        # 5. Versioning
-        version = Version(
-            file_id=file_id,
-            author="agent",
-            change_type=ChangeType.EDIT,
-            summary=summary,
-            diff_patch=f"Updated block {block_index}",
-        )
-        context.db.add(version)
-        await context.db.commit()
-
-        # Broadcast file update event
-        from app.websocket import manager
-        await manager.broadcast_to_session(
-            context.session_id,
-            {
-                "type": "file_update",
-                "data": {
-                    "file_id": file_id,
-                    "version_id": version.id,
-                    "content": new_full_content,
-                    "summary": summary,
-                    "author": "agent"
-                }
-            }
-        )
-
-        return ToolResult(
-            success=True,
-            data={
-                "file_id": file_id,
-                "block_index": block_index,
-                "version_id": version.id,
-                "message": "Block updated successfully"
-            }
-        )
 
 class InsertBlockTool(BaseTool):
-    """
-    Tool to insert a new block of text in a Markdown file.
-    """
-    name = "insert_block"
-    description = "Insert a new block (paragraph) in a Markdown file after a specific index."
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "file_id": {
-                "type": "string",
-                "description": "The ID of the file to update"
+    @property
+    def name(self) -> str:
+        return "insert_block"
+
+    @property
+    def description(self) -> str:
+        return "Propose inserting a new markdown block after a specified index (-1 inserts at top)."
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string", "description": "Target markdown file ID"},
+                "after_block_index": {"type": "integer", "description": "Insert after this block index"},
+                "content": {"type": "string", "description": "New block content"},
+                "summary": {"type": "string", "description": "Short change summary"},
             },
-            "after_block_index": {
-                "type": "integer",
-                "description": "The index of the block after which to insert. Use -1 to insert at the beginning."
-            },
-            "content": {
-                "type": "string",
-                "description": "The content of the new block"
-            },
-            "summary": {
-                "type": "string",
-                "description": "A short summary of the insertion"
-            }
-        },
-        "required": ["file_id", "after_block_index", "content", "summary"]
-    }
-    required_permission = PermissionLevel.WRITE
-    writable_only = True
+            "required": ["file_id", "after_block_index", "content", "summary"],
+        }
 
-    async def execute(self, context: ToolContext, **kwargs) -> ToolResult:
-        file_id = kwargs.get("file_id")
-        after_block_index = kwargs.get("after_block_index")
-        content = kwargs.get("content")
-        summary = kwargs.get("summary")
+    @property
+    def required_permission(self) -> PermissionLevel:
+        return PermissionLevel.WRITE
 
-        # 1. Get file
-        stmt = select(File).where(File.id == file_id)
-        result = await context.db.execute(stmt)
-        file_record = result.scalar_one_or_none()
+    @property
+    def writable_only(self) -> bool:
+        return True
 
-        if not file_record:
-            return ToolResult(success=False, error=f"File {file_id} not found")
+    async def execute(self, arguments: Dict[str, Any], context: ToolContext) -> ToolResult:
+        file_id = arguments["file_id"]
+        after_block_index = arguments["after_block_index"]
+        content = arguments["content"]
+        summary = arguments["summary"]
 
-        if file_record.file_type != FileType.MD:
-             return ToolResult(success=False, error="Block insertion only supported for Markdown files")
+        file = await _load_file(context, file_id)
+        if not file:
+            return ToolResult(success=False, error=f"File {file_id} not found", error_code="FILE_NOT_FOUND")
+        if file.file_type != FileType.MD:
+            return ToolResult(
+                success=False,
+                error="Block insertion is only supported for markdown files",
+                error_code="FILE_NOT_WRITABLE",
+            )
 
-        # 2. Read and split content
-        try:
-            with open(file_record.path, "r", encoding="utf-8") as f:
-                full_content = f.read()
-        except Exception as e:
-            return ToolResult(success=False, error=f"Failed to read file: {str(e)}")
-
-        blocks = full_content.split("\\n\\n")
-
-        # 3. Insert block
+        old_content = _read_text(file.path)
+        blocks = old_content.split("\n\n") if old_content else []
         if after_block_index < -1 or after_block_index >= len(blocks):
-             return ToolResult(success=False, error=f"Index {after_block_index} out of range")
+            return ToolResult(
+                success=False,
+                error=f"Index {after_block_index} out of range",
+                error_code="INVALID_BLOCK_INDEX",
+            )
 
-        blocks.insert(after_block_index + 1, content)
-        new_full_content = "\\n\\n".join(blocks)
+        insert_at = after_block_index + 1
+        blocks.insert(insert_at, content)
+        new_content = "\n\n".join(blocks)
+        return await _create_pending_diff_event(context, file, old_content, new_content, summary)
 
-        # 4. Write back
-        try:
-            with open(file_record.path, "w", encoding="utf-8") as f:
-                f.write(new_full_content)
-        except Exception as e:
-            return ToolResult(success=False, error=f"Failed to write to file: {str(e)}")
-
-        # 5. Versioning
-        version = Version(
-            file_id=file_id,
-            author="agent",
-            change_type=ChangeType.EDIT,
-            summary=summary,
-            diff_patch=f"Inserted block after {after_block_index}",
-        )
-        context.db.add(version)
-        await context.db.commit()
-
-        # Broadcast file update event
-        from app.websocket import manager
-        await manager.broadcast_to_session(
-            context.session_id,
-            {
-                "type": "file_update",
-                "data": {
-                    "file_id": file_id,
-                    "version_id": version.id,
-                    "content": new_full_content,
-                    "summary": summary,
-                    "author": "agent"
-                }
-            }
-        )
-
-        return ToolResult(success=True, data={"message": "Block inserted successfully"})
 
 class DeleteBlockTool(BaseTool):
-    """
-    Tool to delete a block of text in a Markdown file.
-    """
-    name = "delete_block"
-    description = "Delete a specific block (paragraph) in a Markdown file."
-    parameters_schema = {
-        "type": "object",
-        "properties": {
-            "file_id": {
-                "type": "string",
-                "description": "The ID of the file to update"
+    @property
+    def name(self) -> str:
+        return "delete_block"
+
+    @property
+    def description(self) -> str:
+        return "Propose deleting one markdown block by index."
+
+    @property
+    def parameters_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "file_id": {"type": "string", "description": "Target markdown file ID"},
+                "block_index": {"type": "integer", "description": "Block index to delete"},
+                "summary": {"type": "string", "description": "Short change summary"},
             },
-            "block_index": {
-                "type": "integer",
-                "description": "The index of the block to delete"
-            },
-            "summary": {
-                "type": "string",
-                "description": "A short summary of the deletion"
-            }
-        },
-        "required": ["file_id", "block_index", "summary"]
-    }
-    required_permission = PermissionLevel.WRITE
-    writable_only = True
+            "required": ["file_id", "block_index", "summary"],
+        }
 
-    async def execute(self, context: ToolContext, **kwargs) -> ToolResult:
-        file_id = kwargs.get("file_id")
-        block_index = kwargs.get("block_index")
-        summary = kwargs.get("summary")
+    @property
+    def required_permission(self) -> PermissionLevel:
+        return PermissionLevel.WRITE
 
-        # 1. Get file
-        stmt = select(File).where(File.id == file_id)
-        result = await context.db.execute(stmt)
-        file_record = result.scalar_one_or_none()
+    @property
+    def writable_only(self) -> bool:
+        return True
 
-        if not file_record:
-            return ToolResult(success=False, error=f"File {file_id} not found")
+    async def execute(self, arguments: Dict[str, Any], context: ToolContext) -> ToolResult:
+        file_id = arguments["file_id"]
+        block_index = arguments["block_index"]
+        summary = arguments["summary"]
 
-        if file_record.file_type != FileType.MD:
-             return ToolResult(success=False, error="Block deletion only supported for Markdown files")
+        if block_index < 0:
+            raise ToolValidationError(self.name, "block_index", "Must be >= 0")
 
-        # 2. Read and split content
-        try:
-            with open(file_record.path, "r", encoding="utf-8") as f:
-                full_content = f.read()
-        except Exception as e:
-            return ToolResult(success=False, error=f"Failed to read file: {str(e)}")
+        file = await _load_file(context, file_id)
+        if not file:
+            return ToolResult(success=False, error=f"File {file_id} not found", error_code="FILE_NOT_FOUND")
+        if file.file_type != FileType.MD:
+            return ToolResult(
+                success=False,
+                error="Block deletion is only supported for markdown files",
+                error_code="FILE_NOT_WRITABLE",
+            )
 
-        blocks = full_content.split("\\n\\n")
+        old_content = _read_text(file.path)
+        blocks = old_content.split("\n\n") if old_content else []
+        if block_index >= len(blocks):
+            return ToolResult(
+                success=False,
+                error=f"Index {block_index} out of range",
+                error_code="INVALID_BLOCK_INDEX",
+            )
 
-        # 3. Delete block
-        if block_index < 0 or block_index >= len(blocks):
-             return ToolResult(success=False, error=f"Index {block_index} out of range")
-
-        deleted_content = blocks.pop(block_index)
-        new_full_content = "\\n\\n".join(blocks)
-
-        # 4. Write back
-        try:
-            with open(file_record.path, "w", encoding="utf-8") as f:
-                f.write(new_full_content)
-        except Exception as e:
-            return ToolResult(success=False, error=f"Failed to write to file: {str(e)}")
-
-        # 5. Versioning
-        version = Version(
-            file_id=file_id,
-            author="agent",
-            change_type=ChangeType.DELETE,
-            summary=summary,
-            diff_patch=f"Deleted block {block_index}: {deleted_content[:50]}...",
-        )
-        context.db.add(version)
-        await context.db.commit()
-
-        # Broadcast file update event
-        from app.websocket import manager
-        await manager.broadcast_to_session(
-            context.session_id,
-            {
-                "type": "file_update",
-                "data": {
-                    "file_id": file_id,
-                    "version_id": version.id,
-                    "content": new_full_content,
-                    "summary": summary,
-                    "author": "agent"
-                }
-            }
-        )
-
-        return ToolResult(success=True, data={"message": "Block deleted successfully"})
+        blocks.pop(block_index)
+        new_content = "\n\n".join(blocks)
+        return await _create_pending_diff_event(context, file, old_content, new_content, summary)

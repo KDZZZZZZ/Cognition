@@ -6,8 +6,8 @@ import { usePaneStore } from './stores/paneStore';
 import { FileNode, ViewMode } from './types';
 
 function App() {
-  const { sidebarOpen, toggleSidebar, activePaneId, setActivePane, theme, toggleTheme } = useUIStore();
-  const { panes, activePaneId: storeActivePaneId, createPane, openTab } = usePaneStore();
+  const { sidebarOpen, toggleSidebar, activePaneId, setActivePane: setUiActivePane, theme, toggleTheme } = useUIStore();
+  const { panes, activePaneId: storeActivePaneId, createPane, openTab, setActivePane: setPaneStoreActivePane } = usePaneStore();
 
   const handleDrop = (e: React.DragEvent, paneId: string) => {
     e.preventDefault();
@@ -70,10 +70,13 @@ function App() {
                 key={pane.id}
                 pane={pane}
                 isActive={(activePaneId || storeActivePaneId) === pane.id}
-                onActivate={() => setActivePane(pane.id)}
+                onActivate={() => {
+                  setUiActivePane(pane.id);
+                  setPaneStoreActivePane(pane.id);
+                }}
                 onDragOver={() => {}}
                 onDragLeave={() => {}}
-                onDrop={() => handleDrop}
+                onDrop={(e) => handleDrop(e, pane.id)}
               />
             ))
           )}

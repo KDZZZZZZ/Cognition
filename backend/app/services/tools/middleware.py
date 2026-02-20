@@ -128,8 +128,8 @@ class PermissionMiddleware:
         if not file_id:
             return
 
-        # Get permission level for this file
-        permission = context.permissions.get(file_id, PermissionLevel.NONE)
+        # Default visibility is READ unless explicitly hidden.
+        permission = context.permissions.get(file_id, PermissionLevel.READ)
 
         # Check NONE permission first
         if permission == PermissionLevel.NONE:
@@ -194,7 +194,7 @@ class PermissionMiddleware:
         """
         return [
             file_id for file_id in file_ids
-            if context.permissions.get(file_id, PermissionLevel.NONE) != PermissionLevel.NONE
+            if context.permissions.get(file_id, PermissionLevel.READ) != PermissionLevel.NONE
         ]
 
     def filter_readable_files(
@@ -210,7 +210,7 @@ class PermissionMiddleware:
         """
         return [
             file_id for file_id in file_ids
-            if context.permissions.get(file_id, PermissionLevel.NONE) in (
+            if context.permissions.get(file_id, PermissionLevel.READ) in (
                 PermissionLevel.READ, PermissionLevel.WRITE
             )
         ]

@@ -1,39 +1,35 @@
 from typing import Optional
 
+
 class SystemPrompts:
-    """
-    Centralized repository for system prompts and templates.
-    """
+    """Centralized system prompts for KnowledgeIDE agent behavior."""
 
-    MAIN_SYSTEM_PROMPT = """You are an AI assistant for the Knowledge IDE. You help users:
+    MAIN_SYSTEM_PROMPT = """You are an AI assistant inside KnowledgeIDE.
 
-1. Understand and summarize documents they are reading
-2. Answer questions based on document content
-3. Help edit and improve their markdown notes
-4. Search and find relevant information across documents
+Goals:
+1. Understand and summarize documents.
+2. Answer with evidence from accessible sources.
+3. Help users edit markdown notes safely.
+4. Respect file visibility and permission constraints.
 
-When responding:
-- Be concise and direct.
-- Cite specific documents and page numbers when referencing content.
-- If the user is looking at a specific document (Viewport Context), prioritize that information.
-- If you need to read a document, use the read_document tool.
-- If you need to search for information, use the search_documents tool.
-- If you need to modify a markdown file, use the available editor tools:
-    - update_block: For changing specific paragraphs (preferred for small edits)
-    - insert_block: For adding new content
-    - delete_block: For removing content
-    - update_file: Only for full rewrites
-- Always ask for confirmation before making significant changes.
+Tool policy (strict):
+- If the user asks about "what I am currently reading/viewing", call `read_visible_pdf_context` first.
+- If the user asks for specific pages or a page range, call `read_pdf_pages`.
+- If the user asks an open search question, call `search_pdf_passages` or `search_documents`.
+- For note edits, use editor tools that create pending diff events (do not assume direct file overwrite).
 
-Available tools:
-- read_document: Read the full content of any accessible document (md, pdf, docx, txt)
-- search_documents: Search for relevant content using semantic search
-- update_file: Replace the entire content of a file (use with caution)
-- update_block: Update a specific paragraph/block in a Markdown file (0-indexed)
-- insert_block: Insert a new paragraph/block
-- delete_block: Delete a paragraph/block
+Citation policy (strict):
+- When citing PDF evidence, use this exact format: `[file_name p.<page>]`.
+- Do not invent page numbers. Only cite pages returned by tools.
+- If evidence is insufficient, explicitly say so.
 
-Important: Only .md files can be modified. PDF and DOCX files are read-only.
+Permission policy (strict):
+- If access is denied (permission `none`), clearly refuse and ask the user to grant access.
+- Never claim to have read files that are not in your accessible file list.
+
+Reliability:
+- Prefer tool-based evidence over assumptions.
+- Keep responses concise and factual.
 """
 
     VIEWPORT_CONTEXT_TEMPLATE = """
@@ -43,11 +39,16 @@ Page: {page}
 """
 
     @staticmethod
-    def format_viewport_context(file_name: str, file_type: str, page: Optional[int] = None, content: Optional[str] = None) -> str:
+    def format_viewport_context(
+        file_name: str,
+        file_type: str,
+        page: Optional[int] = None,
+        content: Optional[str] = None,
+    ) -> str:
         base = SystemPrompts.VIEWPORT_CONTEXT_TEMPLATE.format(
             file_name=file_name,
             file_type=file_type,
-            page=page if page else "N/A"
+            page=page if page else "N/A",
         )
         if content:
             base += f"\nVisible Content:\n'''\n{content}\n'''"

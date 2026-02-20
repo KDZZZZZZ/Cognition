@@ -12,7 +12,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useVersionStore } from '../../stores/versionStore';
 import { useDiffStore } from '../../stores/diffStore';
 import { FileIcon } from '../ui/FileIcon';
-import { api, BASE_URL } from '../../api/client';
+import { api, BASE_URL, DiffEventDTO } from '../../api/client';
 import { ViewMode, Permission } from '../../types';
 
 interface PaneRendererProps {
@@ -21,7 +21,7 @@ interface PaneRendererProps {
   onActivate: () => void;
   onDragOver: () => void;
   onDragLeave: () => void;
-  onDrop: () => void;
+  onDrop: (e: React.DragEvent) => void;
 }
 
 interface TabDragData {
@@ -41,6 +41,9 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const [isCreating, setIsCreating] = useState(false);
   const [diffMode, setDiffMode] = useState<'split' | 'inline'>('split');
   const [currentPage, setCurrentPage] = useState(1);
+  const [pendingDiffEvent, setPendingDiffEvent] = useState<DiffEventDTO | null>(null);
+  const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
+  const [pendingDiffLoading, setPendingDiffLoading] = useState(false);
   const previousContentRef = useRef<string>('');
 
   const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId);
@@ -56,6 +59,27 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const sessionPerms = activeTab?.type === 'session'
     ? allPermissions[activeTab.id] || {}
     : {};
+
+  const loadPendingDiffForFile = useCallback(async (fileId: string) => {
+    setPendingDiffLoading(true);
+    try {
+      const response = await api.getPendingDiffEvent(fileId);
+      if (response.success && response.data?.event) {
+        setPendingDiffEvent(response.data.event);
+        const firstPending = response.data.event.lines.find((line) => line.decision === 'pending');
+        setSelectedLineId(firstPending?.id || null);
+      } else {
+        setPendingDiffEvent(null);
+        setSelectedLineId(null);
+      }
+    } catch (err) {
+      console.error('Failed to load pending diff event:', err);
+      setPendingDiffEvent(null);
+      setSelectedLineId(null);
+    } finally {
+      setPendingDiffLoading(false);
+    }
+  }, []);
 
   // Handle viewport changes for AI context
   const handleViewportChange = useCallback(async (scrollTop: number, scrollHeight: number, page?: number) => {
@@ -82,8 +106,36 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
         setFileContent(contentStr);
         previousContentRef.current = contentStr;
       });
+      loadPendingDiffForFile(activeTab.id);
+    } else {
+      setPendingDiffEvent(null);
+      setSelectedLineId(null);
     }
-  }, [activeTab?.id]);
+  }, [activeTab?.id, activeTab?.type, getFileContent, loadPendingDiffForFile]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const detail = customEvent.detail || {};
+      const changedFileId = detail.file_id || detail.fileId;
+      if (activeTab?.type === 'md' && changedFileId === activeTab.id) {
+        loadPendingDiffForFile(activeTab.id);
+      }
+    };
+
+    window.addEventListener('diff-event-created', handler);
+    return () => window.removeEventListener('diff-event-created', handler);
+  }, [activeTab?.id, activeTab?.type, loadPendingDiffForFile]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (activeTab?.type === 'md') {
+        loadPendingDiffForFile(activeTab.id);
+      }
+    };
+    window.addEventListener('assistant-message-finished', handler);
+    return () => window.removeEventListener('assistant-message-finished', handler);
+  }, [activeTab?.id, activeTab?.type, loadPendingDiffForFile]);
 
   const handleCreateNewMarkdown = async () => {
     setIsCreating(true);
@@ -213,7 +265,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     if (!tabDragDataStr) {
       // Not a tab drag, let the parent handle it (file drag)
       setIsDragOver(false);
-      onDrop();
+      onDrop(e);
       return;
     }
 
@@ -233,6 +285,40 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
 
     setIsDragOver(false);
   }, [pane.id, moveTabToPane, onDrop]);
+
+  const applyLineDecision = useCallback(async (decision: 'accepted' | 'rejected') => {
+    if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
+
+    const targetLine =
+      pendingDiffEvent.lines.find((line) => line.id === selectedLineId) ||
+      pendingDiffEvent.lines.find((line) => line.decision === 'pending');
+
+    if (!targetLine) return;
+
+    await api.updateDiffLineDecision(activeTab.id, pendingDiffEvent.id, targetLine.id, decision);
+    await loadPendingDiffForFile(activeTab.id);
+  }, [activeTab, loadPendingDiffForFile, pendingDiffEvent, selectedLineId]);
+
+  const finalizePendingDiff = useCallback(async (acceptAll: boolean) => {
+    if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
+
+    const response = await api.finalizeDiffEvent(activeTab.id, pendingDiffEvent.id, {
+      finalContent: acceptAll ? pendingDiffEvent.new_content : pendingDiffEvent.old_content,
+      summary: acceptAll ? 'Accept all pending diff lines' : 'Reject all pending diff lines',
+      author: 'human',
+    });
+
+    if (response.success) {
+      const finalContent = response.data?.final_content || (acceptAll ? pendingDiffEvent.new_content : pendingDiffEvent.old_content);
+      setFileContent(finalContent);
+      previousContentRef.current = finalContent;
+      setPendingDiffEvent(null);
+      setSelectedLineId(null);
+      useFileStore.getState().setFileContent(activeTab.id, finalContent);
+      useFileStore.getState().loadFiles();
+      useFileStore.getState().getFileVersions(activeTab.id);
+    }
+  }, [activeTab, pendingDiffEvent]);
 
   return (
     <div
@@ -278,6 +364,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 onDragEnd={handleTabDragEnd}
                 onClick={(e) => {
                   e.stopPropagation();
+                  onActivate();
                   setActiveTab(pane.id, tab.id);
                 }}
                 className={`group relative flex items-center gap-2 px-2 min-w-[100px] max-w-[160px] text-xs cursor-pointer border-r border-theme-border/20 h-full transition-colors ${
@@ -481,29 +568,81 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             })()}
           </div>
         ) : activeTab.type === 'md' ? (
-          <TiptapMarkdownEditor
-            content={fileContent}
-            onChange={async (val) => {
-              if (activeTab) {
-                const oldContent = previousContentRef.current;
-                await updateFileContent(activeTab.id, val);
-                setFileContent(val);
+          pendingDiffEvent ? (
+            <div className="flex flex-col h-full bg-theme-bg">
+              <div className="bg-amber-50/50 px-3 py-2 border-b border-theme-border/20 text-theme-text flex justify-between items-center text-xs">
+                <span className="flex items-center gap-2">
+                  <GitCommit size={14} />
+                  <strong>{pendingDiffEvent.summary || 'Pending Agent Diff'}</strong>
+                  {pendingDiffLoading && <span className="text-theme-text/50">Refreshing...</span>}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => applyLineDecision('accepted')}
+                    className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
+                  >
+                    Accept
+                  </button>
+                  <button
+                    onClick={() => applyLineDecision('rejected')}
+                    className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
+                  >
+                    Reject
+                  </button>
+                  <button
+                    onClick={() => finalizePendingDiff(true)}
+                    className="px-3 py-1 bg-green-700 text-white rounded hover:bg-green-800"
+                  >
+                    Accept All
+                  </button>
+                  <button
+                    onClick={() => finalizePendingDiff(false)}
+                    className="px-3 py-1 bg-red-700 text-white rounded hover:bg-red-800"
+                  >
+                    Reject All
+                  </button>
+                </div>
+              </div>
+              <div
+                className="flex-1 overflow-hidden"
+                onClick={() => {
+                  if (!selectedLineId) {
+                    const firstPending = pendingDiffEvent.lines.find((line) => line.decision === 'pending');
+                    if (firstPending) setSelectedLineId(firstPending.id);
+                  }
+                }}
+              >
+                <RenderedDiffViewer
+                  oldContent={pendingDiffEvent.old_content}
+                  newContent={pendingDiffEvent.new_content}
+                  mode="inline"
+                />
+              </div>
+            </div>
+          ) : (
+            <TiptapMarkdownEditor
+              content={fileContent}
+              onChange={async (val) => {
+                if (activeTab) {
+                  const oldContent = previousContentRef.current;
+                  await updateFileContent(activeTab.id, val);
+                  setFileContent(val);
 
-                // Record version if content changed significantly (more than just whitespace)
-                if (oldContent.trim() !== val.trim() && Math.abs(oldContent.length - val.length) > 10) {
-                  addVersion(
-                    activeTab.id,
-                    'human',
-                    'edit',
-                    `Edited ${activeTab.name}`,
-                    oldContent,
-                    val
-                  );
-                  previousContentRef.current = val;
+                  if (oldContent.trim() !== val.trim() && Math.abs(oldContent.length - val.length) > 10) {
+                    addVersion(
+                      activeTab.id,
+                      'human',
+                      'edit',
+                      `Edited ${activeTab.name}`,
+                      oldContent,
+                      val
+                    );
+                    previousContentRef.current = val;
+                  }
                 }
-              }
-            }}
-          />
+              }}
+            />
+          )
         ) : (
           <div className="p-8">
             <h1 className="text-2xl font-bold mb-4">{activeTab.name}</h1>
