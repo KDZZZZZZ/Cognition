@@ -110,7 +110,7 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
 
   if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-gray-500">
+      <div className="flex flex-col items-center justify-center h-full text-theme-text/55">
         <p>Failed to load PDF</p>
         <p className="text-sm mt-2">{error}</p>
       </div>
@@ -118,14 +118,20 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-100">
+    <div
+      className="flex flex-col h-full"
+      style={{ backgroundColor: 'var(--theme-surface-muted)' }}
+    >
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-gray-200">
+      <div
+        className="flex items-center justify-between px-4 py-2 border-b border-theme-border/30 paper-divider-dashed"
+        style={{ backgroundColor: 'var(--theme-surface)' }}
+      >
         <div className="flex items-center gap-2">
           <button
             onClick={() => changePage(-1)}
             disabled={pageNumber <= 1}
-            className="p-1.5 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-1.5 hover:bg-theme-text/10 rounded disabled:opacity-40 disabled:cursor-not-allowed"
             title="Previous page"
           >
             <ChevronLeft size={16} />
@@ -138,15 +144,15 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
               max={numPages}
               value={pageNumber}
               onChange={(e) => changePageDirect(parseInt(e.target.value) || 1)}
-              className="w-16 text-center text-sm border border-gray-300 rounded px-1 py-1"
+              className="w-16 text-center text-sm border border-theme-border/35 paper-divider rounded px-1 py-1 bg-theme-bg text-theme-text"
             />
-            <span className="text-sm text-gray-500">/ {numPages}</span>
+            <span className="text-sm text-theme-text/55">/ {numPages}</span>
           </div>
 
           <button
             onClick={() => changePage(1)}
             disabled={pageNumber >= numPages}
-            className="p-1.5 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-1.5 hover:bg-theme-text/10 rounded disabled:opacity-40 disabled:cursor-not-allowed"
             title="Next page"
           >
             <ChevronRight size={16} />
@@ -157,25 +163,25 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
           <button
             onClick={zoomOut}
             disabled={scale <= 0.5}
-            className="p-1.5 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-1.5 hover:bg-theme-text/10 rounded disabled:opacity-40 disabled:cursor-not-allowed"
             title="Zoom out"
           >
             <ZoomOut size={16} />
           </button>
-          <span className="text-sm text-gray-500 min-w-[50px] text-center">
+          <span className="text-sm text-theme-text/55 min-w-[50px] text-center">
             {Math.round(scale * 100)}%
           </span>
           <button
             onClick={zoomIn}
             disabled={scale >= 3}
-            className="p-1.5 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-1.5 hover:bg-theme-text/10 rounded disabled:opacity-40 disabled:cursor-not-allowed"
             title="Zoom in"
           >
             <ZoomIn size={16} />
           </button>
           <button
             onClick={rotate}
-            className="p-1.5 hover:bg-gray-100 rounded"
+            className="p-1.5 hover:bg-theme-text/10 rounded"
             title="Rotate"
           >
             <RotateCw size={16} />
@@ -187,12 +193,12 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-auto flex justify-center bg-gray-500"
+        className="flex-1 overflow-auto flex justify-center bg-theme-text/10"
         style={{ scrollBehavior: 'smooth' }}
       >
         {loading && (
           <div className="flex items-center justify-center h-full">
-            <div className="text-white">Loading PDF...</div>
+            <div className="text-theme-text/65">Loading PDF...</div>
           </div>
         )}
 
@@ -209,7 +215,7 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
             <div
               key={i}
               data-page-number={i + 1}
-              className="mb-4 bg-white shadow-lg"
+              className="mb-4 bg-theme-bg border border-theme-border/20 paper-divider shadow-[0_3px_12px_rgba(16,16,16,0.12)]"
               style={{ transform: `rotate(${rotation}deg)`, transformOrigin: 'center center' }}
             >
               <Page

@@ -13,14 +13,9 @@ export const useUIStore = create<UIState>((set) => ({
     file: null,
   },
 
-  toggleTheme: () => set((state) => {
-    const newTheme = state.theme === 'light' ? 'dark' : 'light';
-    if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-    return { theme: newTheme };
+  toggleTheme: () => set(() => {
+    document.documentElement.classList.remove('dark');
+    return { theme: 'light' };
   }),
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),

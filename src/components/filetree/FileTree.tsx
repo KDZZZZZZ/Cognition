@@ -350,11 +350,11 @@ export function FileTree() {
 
     const dropIndicatorClass =
       isDropTarget && dropPosition === 'before'
-        ? 'before:absolute before:left-0 before:right-0 before:top-0 before:h-0.5 before:bg-blue-500'
+        ? 'before:absolute before:left-0 before:right-0 before:top-0 before:h-0.5 before:bg-theme-text/60'
         : isDropTarget && dropPosition === 'after'
-          ? 'after:absolute after:left-0 after:right-0 after:bottom-0 after:h-0.5 after:bg-blue-500'
+          ? 'after:absolute after:left-0 after:right-0 after:bottom-0 after:h-0.5 after:bg-theme-text/60'
           : isDropTarget && dropPosition === 'inside'
-            ? 'bg-blue-100 ring-1 ring-blue-400'
+            ? 'bg-theme-text/8 ring-1 ring-theme-border/45'
             : '';
 
     return (
@@ -416,7 +416,7 @@ export function FileTree() {
         }}
       >
         {/* Header */}
-        <div className="px-4 py-2 text-xs font-bold text-theme-text/40 uppercase flex items-center justify-between">
+        <div className="px-4 py-2 text-xs font-semibold tracking-[0.08em] text-theme-text/45 uppercase flex items-center justify-between">
           <span>Explorer</span>
           <button
             onClick={handleRefresh}
@@ -428,7 +428,7 @@ export function FileTree() {
         </div>
 
         {/* Quick Actions */}
-        <div className="px-2 pb-2 flex items-center gap-1">
+        <div className="px-2 pb-2 flex items-center gap-1 border-b border-theme-border/20 paper-divider-dashed">
           <button
             onClick={() => openNewDialog('md')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors"

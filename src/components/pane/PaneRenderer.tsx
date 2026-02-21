@@ -322,8 +322,8 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
 
   return (
     <div
-      className={`flex-1 min-w-[320px] max-w-full flex flex-col border-r border-theme-border/20 bg-theme-bg transition-all relative ${
-        isActive ? 'ring-1 ring-inset ring-theme-border z-10' : 'opacity-95'
+      className={`flex-1 min-w-[320px] max-w-full flex flex-col border-r border-theme-border/30 paper-divider-dashed bg-theme-bg transition-all relative ${
+        isActive ? 'ring-1 ring-inset ring-theme-border/50 z-10' : 'opacity-95'
       }`}
       onClick={onActivate}
       onDragOver={(e) => {
@@ -341,14 +341,17 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       onDrop={handlePaneDrop}
     >
       {isDragOver && !draggedTabInfo && (
-        <div className="absolute inset-0 bg-blue-50/50 border-2 border-blue-400 border-dashed z-50 flex items-center justify-center pointer-events-none backdrop-blur-[1px]">
-          <div className="bg-blue-500 text-white px-4 py-2 rounded-lg shadow-lg font-medium flex items-center gap-2">
+        <div className="absolute inset-0 bg-theme-text/6 border-2 border-theme-border/40 border-dashed paper-divider-dashed z-50 flex items-center justify-center pointer-events-none backdrop-blur-[1px]">
+          <div className="bg-theme-text text-theme-bg px-4 py-2 rounded-lg shadow-lg font-medium flex items-center gap-2 border border-theme-border/40">
             <Download size={18} /> Drop to Open
           </div>
         </div>
       )}
-      <div className="flex items-center h-9 bg-theme-bg/50 border-b border-theme-border/20 select-none">
-        <div className="flex-1 flex overflow-x-auto no-scrollbar">
+      <div
+        className="flex items-center h-9 border-b border-theme-border/30 paper-divider-dashed select-none"
+        style={{ backgroundColor: 'var(--theme-surface)' }}
+      >
+        <div className="flex-1 flex overflow-x-auto">
           {pane.tabs.map((tab, index) => {
             const isBeingDragged = draggedTabInfo?.tabId === tab.id;
             const isDropTarget = dropTargetIndex === index;
@@ -367,15 +370,15 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                   onActivate();
                   setActiveTab(pane.id, tab.id);
                 }}
-                className={`group relative flex items-center gap-2 px-2 min-w-[100px] max-w-[160px] text-xs cursor-pointer border-r border-theme-border/20 h-full transition-colors ${
+                className={`group relative flex items-center gap-2 px-2 min-w-[100px] max-w-[160px] text-xs cursor-pointer border-r border-theme-border/25 paper-divider-dashed h-full transition-colors ${
                   pane.activeTabId === tab.id
-                    ? 'bg-theme-bg text-theme-text border-t-2 border-t-theme-border font-medium'
-                    : 'bg-theme-bg/30 text-theme-text/60 hover:bg-theme-text/10'
-                } ${isDropTarget ? 'border-l-2 border-l-theme-border' : ''} ${
+                    ? 'bg-theme-bg text-theme-text border-t-2 border-t-theme-border/80 font-medium'
+                    : 'bg-theme-bg/35 text-theme-text/60 hover:bg-theme-text/8'
+                } ${isDropTarget ? 'ring-1 ring-inset ring-theme-border/50' : ''} ${
                   isBeingDragged ? 'opacity-40' : ''
                 }`}
               >
-                <GripVertical size={12} className="text-theme-text/30 cursor-grab active:cursor-grabbing flex-shrink-0" />
+                <GripVertical size={12} className="paper-grip cursor-grab active:cursor-grabbing flex-shrink-0" />
                 <FileIcon type={tab.type} />
                 <span className="truncate flex-1">{tab.name}</span>
                 <button
@@ -383,7 +386,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                     e.stopPropagation();
                     closeTab(pane.id, tab.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 hover:bg-theme-text/20 rounded p-0.5 transition-opacity flex-shrink-0"
+                  className="opacity-0 group-hover:opacity-100 hover:bg-theme-text/12 rounded p-0.5 transition-opacity flex-shrink-0"
                 >
                   <X size={12} />
                 </button>
@@ -421,7 +424,10 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 className="fixed inset-0 z-40"
                 onClick={() => setShowNewTabMenu(false)}
               />
-              <div className="absolute right-0 top-full mt-1 z-50 bg-theme-bg border border-theme-border/20 rounded-lg shadow-lg py-1 min-w-[140px]">
+              <div
+                className="absolute right-0 top-full mt-1 z-50 border border-theme-border/30 paper-divider rounded-lg shadow-lg py-1 min-w-[140px]"
+                style={{ backgroundColor: 'var(--theme-surface)' }}
+              >
                 <button
                   onClick={handleCreateNewMarkdown}
                   disabled={isCreating}
@@ -447,7 +453,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             e.stopPropagation();
             closePane(pane.id);
           }}
-          className="w-8 flex items-center justify-center hover:bg-red-50 hover:text-red-600 text-theme-text/40 h-full border-l border-theme-border/20"
+          className="w-8 flex items-center justify-center hover:bg-red-50 hover:text-red-600 text-theme-text/40 h-full border-l border-theme-border/25 paper-divider-dashed"
         >
           <X size={14} />
         </button>
@@ -469,14 +475,17 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
           />
         ) : activeTab.mode === 'diff' ? (
           <div className="flex flex-col h-full bg-theme-bg">
-            <div className="bg-blue-50/20 px-3 py-2 border-b border-theme-border/20 text-theme-text flex justify-between items-center text-xs">
+            <div
+              className="px-3 py-2 border-b border-theme-border/30 paper-divider-dashed text-theme-text flex justify-between items-center text-xs"
+              style={{ backgroundColor: 'var(--theme-surface)' }}
+            >
               <span className="flex items-center gap-2">
                 <GitCommit size={14} />{' '}
                 <strong>{activeDiff?.versionLabel || 'Diff View'}</strong>
               </span>
 
               <div className="flex items-center gap-2">
-                <div className="flex bg-theme-bg/50 rounded p-0.5 border border-theme-border/10">
+                <div className="flex bg-theme-bg/50 rounded p-0.5 border border-theme-border/25 paper-divider">
                   <button
                     onClick={() => setDiffMode('split')}
                     className={`px-2 py-0.5 rounded transition-colors ${diffMode === 'split' ? 'bg-theme-bg shadow-sm text-theme-text' : 'text-theme-text/60 hover:bg-theme-text/10'}`}
@@ -496,7 +505,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                     clearDiff();
                     setTabMode(pane.id, activeTab.id, 'editor');
                   }}
-                  className="text-xs bg-theme-bg border border-theme-border/20 px-2 py-0.5 rounded hover:bg-theme-text/10 ml-2"
+                  className="text-xs bg-theme-bg border border-theme-border/25 paper-divider px-2 py-0.5 rounded hover:bg-theme-text/10 ml-2"
                 >
                   Exit Diff
                 </button>
@@ -542,7 +551,10 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             </div>
           </div>
         ) : activeTab.type === 'pdf' ? (
-          <div className="w-full h-full bg-theme-bg/20 flex flex-col">
+          <div
+            className="w-full h-full flex flex-col"
+            style={{ backgroundColor: 'var(--theme-surface-muted)' }}
+          >
             {(() => {
               const file = files.find((f) => f.id === activeTab.id);
               if (!file || !file.url) {

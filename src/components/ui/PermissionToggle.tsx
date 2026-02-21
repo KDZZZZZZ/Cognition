@@ -38,25 +38,12 @@ export function PermissionToggle({ status, onClick, syncing = false }: Permissio
     }
   };
 
-  const getBgColor = () => {
-    switch (status) {
-      case 'read':
-        return 'bg-blue-50';
-      case 'write':
-        return 'bg-green-50';
-      case 'none':
-        return 'bg-gray-100';
-      default:
-        return 'bg-blue-50';
-    }
-  };
-
   return (
     <button
       onClick={onClick}
       disabled={syncing}
-      className={`p-1.5 rounded hover:bg-theme-text/20 transition-colors flex items-center gap-1 border border-theme-border/20 ${
-        status === 'none' ? 'bg-theme-text/5 text-theme-text/40' : 'bg-theme-text/10 text-theme-text'
+      className={`p-1.5 rounded hover:bg-theme-text/15 transition-colors flex items-center gap-1 border border-theme-border/25 paper-divider ${
+        status === 'none' ? 'bg-theme-text/5 text-theme-text/40' : 'bg-theme-bg text-theme-text'
       } ${syncing ? 'opacity-70 cursor-wait' : ''}`}
       title={getLabel()}
     >

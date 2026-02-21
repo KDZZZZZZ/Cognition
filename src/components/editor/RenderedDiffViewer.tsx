@@ -14,36 +14,41 @@ interface RenderedDiffViewerProps {
   mode?: 'split' | 'inline';
 }
 
-const MarkdownContent = ({ content, className }: { content: string, className?: string }) => (
-  <div className={`prose prose-sm max-w-none dark:prose-invert ${className}`}>
+const MarkdownContent = ({ content, className }: { content: string; className?: string }) => (
+  <div className={`prose prose-sm max-w-none text-theme-text ${className || ''}`}>
     <ReactMarkdown
       remarkPlugins={[remarkMath, remarkGfm]}
       rehypePlugins={[rehypeRaw, rehypeKatex]}
       components={{
-        pre: ({node, ...props}) => <pre className="bg-gray-100 p-2 rounded overflow-x-auto" {...props} />,
-        code: ({node, className, children, ...props}) => {
-          const match = /language-(\w+)/.exec(className || '');
-          return (
-            <code className={`${className} bg-gray-100 px-1 py-0.5 rounded text-xs`} {...props}>
-              {children}
-            </code>
-          );
-        },
-        span: ({node, className, children, ...props}) => {
-          const latex = props['data-latex' as keyof typeof props];
+        pre: ({ node, ...props }) => (
+          <pre className="bg-theme-text/8 border border-theme-border/20 paper-divider p-2 rounded overflow-x-auto" {...props} />
+        ),
+        code: ({ node, className, children, ...props }) => (
+          <code className={`${className || ''} bg-theme-text/8 px-1 py-0.5 rounded text-xs`} {...props}>
+            {children}
+          </code>
+        ),
+        span: ({ node, className, children, ...props }) => {
+          const dataAttrs = props as Record<string, unknown>;
+          const latex = dataAttrs['data-latex'];
+          const isDisplayMode = dataAttrs['data-display'] === 'yes';
           if (latex) {
             try {
               const html = katex.renderToString(String(latex), {
                 throwOnError: false,
-                displayMode: props['data-display'] === 'yes'
+                displayMode: isDisplayMode,
               });
               return <span dangerouslySetInnerHTML={{ __html: html }} />;
-            } catch (e) {
-              return <span className="text-red-500">{String(latex)}</span>;
+            } catch {
+              return <span className="text-red-600">{String(latex)}</span>;
             }
           }
-          return <span className={className} {...props}>{children}</span>;
-        }
+          return (
+            <span className={className} {...props}>
+              {children}
+            </span>
+          );
+        },
       }}
     >
       {content}
@@ -59,7 +64,6 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
     return diffArrays(oldBlocks, newBlocks);
   }, [oldContent, newContent]);
 
-  // Group diffs for split view
   const splitRows = useMemo(() => {
     if (mode !== 'split') return [];
 
@@ -68,23 +72,19 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
     while (i < diffs.length) {
       const part = diffs[i];
       if (!part.added && !part.removed) {
-        // Unchanged
-        rows.push({ left: part.value, right: part.value, type: 'equal' });
-        i++;
+        rows.push({ left: part.value, right: part.value, type: 'equal' as const });
+        i += 1;
       } else if (part.removed) {
-        // Check if next is added (Modification)
         if (i + 1 < diffs.length && diffs[i + 1].added) {
-          rows.push({ left: part.value, right: diffs[i + 1].value, type: 'modify' });
+          rows.push({ left: part.value, right: diffs[i + 1].value, type: 'modify' as const });
           i += 2;
         } else {
-          // Deletion
-          rows.push({ left: part.value, right: [], type: 'delete' });
-          i++;
+          rows.push({ left: part.value, right: [], type: 'delete' as const });
+          i += 1;
         }
       } else if (part.added) {
-        // Addition
-        rows.push({ left: [], right: part.value, type: 'add' });
-        i++;
+        rows.push({ left: [], right: part.value, type: 'add' as const });
+        i += 1;
       }
     }
     return rows;
@@ -92,19 +92,32 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
 
   if (mode === 'split') {
     return (
-      <div className="w-full h-full overflow-y-auto bg-white text-sm">
-        <div className="grid grid-cols-2 divide-x divide-gray-200 min-h-full">
-          {/* Header */}
-          <div className="sticky top-0 bg-gray-50 border-b border-gray-200 p-2 text-center text-xs font-semibold text-gray-500 uppercase z-10">Original</div>
-          <div className="sticky top-0 bg-gray-50 border-b border-gray-200 p-2 text-center text-xs font-semibold text-gray-500 uppercase z-10">Modified</div>
+      <div className="w-full h-full overflow-y-auto bg-theme-bg text-sm">
+        <div className="grid grid-cols-2 divide-x divide-theme-border/20 min-h-full">
+          <div
+            className="sticky top-0 border-b border-theme-border/30 paper-divider-dashed p-2 text-center text-xs font-semibold tracking-[0.06em] text-theme-text/55 uppercase z-10"
+            style={{ backgroundColor: 'var(--theme-surface)' }}
+          >
+            Original
+          </div>
+          <div
+            className="sticky top-0 border-b border-theme-border/30 paper-divider-dashed p-2 text-center text-xs font-semibold tracking-[0.06em] text-theme-text/55 uppercase z-10"
+            style={{ backgroundColor: 'var(--theme-surface)' }}
+          >
+            Modified
+          </div>
 
           {splitRows.map((row, rowIndex) => (
             <React.Fragment key={rowIndex}>
-              {/* Left Column */}
-              <div className={`p-4 ${
-                row.type === 'delete' ? 'bg-red-50' :
-                row.type === 'modify' ? 'bg-yellow-50/50' : ''
-              } ${row.type === 'delete' ? 'diff-deletion' : ''}`}>
+              <div
+                className={`p-4 ${
+                  row.type === 'delete'
+                    ? 'bg-red-50'
+                    : row.type === 'modify'
+                      ? 'bg-theme-text/5'
+                      : ''
+                } ${row.type === 'delete' ? 'diff-deletion' : ''}`}
+              >
                 {row.left.map((block, i) => (
                   <div key={i} className="mb-4 last:mb-0">
                     <MarkdownContent content={block} className={row.type === 'delete' ? 'opacity-70' : ''} />
@@ -112,11 +125,15 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
                 ))}
               </div>
 
-              {/* Right Column */}
-              <div className={`p-4 ${
-                row.type === 'add' ? 'bg-green-50' :
-                row.type === 'modify' ? 'bg-yellow-50/50' : ''
-              } ${row.type === 'add' ? 'diff-addition' : ''}`}>
+              <div
+                className={`p-4 ${
+                  row.type === 'add'
+                    ? 'bg-green-50'
+                    : row.type === 'modify'
+                      ? 'bg-theme-text/5'
+                      : ''
+                } ${row.type === 'add' ? 'diff-addition' : ''}`}
+              >
                 {row.right.map((block, i) => (
                   <div key={i} className="mb-4 last:mb-0">
                     <MarkdownContent content={block} />
@@ -130,31 +147,35 @@ export function RenderedDiffViewer({ oldContent, newContent, mode = 'inline' }: 
     );
   }
 
-  // Inline Mode (Existing behavior)
   return (
-    <div className="w-full h-full overflow-y-auto p-4 bg-white text-sm">
+    <div className="w-full h-full overflow-y-auto p-4 bg-theme-bg text-sm">
       <div className="max-w-4xl mx-auto space-y-4">
         {diffs.map((part, index) => {
           if (part.value.length === 0) return null;
 
           let bgClass = '';
-          let borderClass = 'border-transparent';
-          let label = null;
+          let borderClass = 'border-theme-border/20';
+          let label: React.ReactNode = null;
 
           if (part.added) {
-            bgClass = 'bg-green-50/50';
-            borderClass = 'border-green-200';
-            label = <div className="text-[10px] font-bold text-green-600 uppercase tracking-wider mb-1">Added</div>;
+            bgClass = 'bg-green-50/70';
+            borderClass = 'border-green-300/80';
+            label = <div className="text-[10px] font-bold text-green-700 uppercase tracking-wider mb-1">Added</div>;
           } else if (part.removed) {
-            bgClass = 'bg-red-50/50';
-            borderClass = 'border-red-200';
-            label = <div className="text-[10px] font-bold text-red-600 uppercase tracking-wider mb-1">Removed</div>;
+            bgClass = 'bg-red-50/70';
+            borderClass = 'border-red-300/80';
+            label = <div className="text-[10px] font-bold text-red-700 uppercase tracking-wider mb-1">Removed</div>;
           }
 
           return (
             <div key={index} className="flex flex-col gap-2">
               {part.value.map((blockContent, i) => (
-                <div key={i} className={`relative p-4 rounded-lg border-2 ${bgClass} ${borderClass} transition-colors ${part.added ? 'diff-addition' : ''} ${part.removed ? 'diff-deletion' : ''}`}>
+                <div
+                  key={i}
+                  className={`relative p-4 rounded-lg border ${bgClass} ${borderClass} transition-colors ${
+                    part.added ? 'diff-addition' : ''
+                  } ${part.removed ? 'diff-deletion' : ''}`}
+                >
                   {label}
                   <MarkdownContent
                     content={blockContent}

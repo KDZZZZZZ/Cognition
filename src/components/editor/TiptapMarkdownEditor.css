@@ -1,35 +1,34 @@
-/* TiptapMarkdownEditor 样式 */
-
 .tiptap-markdown-wrapper {
   width: 100%;
   height: 100%;
   overflow: auto;
-  background-color: var(--theme-bg);
-  transition: background-color 0.3s;
+  background: var(--theme-bg);
 }
 
 .tiptap-markdown-editor {
   min-height: 100%;
-  padding: 1.5rem;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding: 1.5rem 1.75rem;
+  font-family: var(--font-body);
   font-size: 1rem;
-  line-height: 1.75;
+  line-height: 1.82;
   color: var(--theme-text);
   outline: none;
-  transition: color 0.3s;
+  text-wrap: pretty;
 }
 
-/* Stage 4: 视觉反馈 - 活跃行显示 MD 语法标记 */
-
-/* 标题前显示 # 标记 */
-.tiptap-markdown-editor h1 {
+.tiptap-markdown-editor h1,
+.tiptap-markdown-editor h2,
+.tiptap-markdown-editor h3 {
   position: relative;
+  letter-spacing: 0.02em;
+}
+
+.tiptap-markdown-editor h1 {
   font-size: 2rem;
   font-weight: 700;
   margin: 1.5rem 0 1rem;
   padding-bottom: 0.5rem;
-  border-bottom: 2px solid var(--theme-border);
-  opacity: 0.9;
+  border-bottom: 2px solid var(--theme-border-soft);
 }
 
 .tiptap-markdown-editor h1::before {
@@ -37,24 +36,16 @@
   position: absolute;
   left: -1.75rem;
   color: var(--theme-text);
-  font-weight: 400;
   opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.tiptap-markdown-editor h1:focus-within::before,
-.tiptap-markdown-editor h1:hover::before {
-  opacity: 0.5;
+  transition: opacity 0.2s ease;
 }
 
 .tiptap-markdown-editor h2 {
-  position: relative;
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: 1.48rem;
+  font-weight: 650;
   margin: 1.25rem 0 0.75rem;
   padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--theme-border);
-  opacity: 0.8;
+  border-bottom: 1px dashed var(--theme-border-soft);
 }
 
 .tiptap-markdown-editor h2::before {
@@ -62,20 +53,13 @@
   position: absolute;
   left: -2.25rem;
   color: var(--theme-text);
-  font-weight: 400;
   opacity: 0;
-  transition: opacity 0.2s;
-}
-
-.tiptap-markdown-editor h2:focus-within::before,
-.tiptap-markdown-editor h2:hover::before {
-  opacity: 0.5;
+  transition: opacity 0.2s ease;
 }
 
 .tiptap-markdown-editor h3 {
-  position: relative;
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 1.2rem;
+  font-weight: 620;
   margin: 1rem 0 0.5rem;
 }
 
@@ -84,119 +68,118 @@
   position: absolute;
   left: -2.75rem;
   color: var(--theme-text);
-  font-weight: 400;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s ease;
 }
 
-.tiptap-markdown-editor h3:focus-within::before,
-.tiptap-markdown-editor h3:hover::before {
-  opacity: 0.5;
+.tiptap-markdown-editor h1:hover::before,
+.tiptap-markdown-editor h1:focus-within::before,
+.tiptap-markdown-editor h2:hover::before,
+.tiptap-markdown-editor h2:focus-within::before,
+.tiptap-markdown-editor h3:hover::before,
+.tiptap-markdown-editor h3:focus-within::before {
+  opacity: 0.45;
 }
 
-/* 段落 */
 .tiptap-markdown-editor p {
   margin: 0.75rem 0;
 }
 
-/* 引用块显示 > 标记 */
 .tiptap-markdown-editor blockquote {
   position: relative;
   margin: 1rem 0;
-  padding: 0.75rem 1rem;
-  border-left: 4px solid var(--theme-border);
-  background: rgba(128, 128, 128, 0.1);
-  border-radius: 0 0.375rem 0.375rem 0;
+  padding: 0.8rem 1rem;
+  border-left: 3px solid var(--theme-border-soft);
+  background: var(--theme-text);
+  background: color-mix(in srgb, var(--theme-text) 7%, transparent);
   color: var(--theme-text);
   font-style: italic;
-  opacity: 0.9;
 }
 
 .tiptap-markdown-editor blockquote::before {
   content: '>';
   position: absolute;
-  left: -1.5rem;
-  top: 0.75rem;
+  left: -1.45rem;
+  top: 0.7rem;
   color: var(--theme-text);
-  font-style: normal;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s ease;
 }
 
-.tiptap-markdown-editor blockquote:focus-within::before,
-.tiptap-markdown-editor blockquote:hover::before {
-  opacity: 0.5;
+.tiptap-markdown-editor blockquote:hover::before,
+.tiptap-markdown-editor blockquote:focus-within::before {
+  opacity: 0.45;
 }
 
-/* 代码块 */
 .tiptap-markdown-editor pre {
   position: relative;
   margin: 1rem 0;
   padding: 1rem;
-  background: rgba(128, 128, 128, 0.1);
+  background: color-mix(in srgb, var(--theme-text) 7%, transparent);
+  border: 1px dashed var(--theme-border-soft);
   border-radius: 0.5rem;
   overflow-x: auto;
-  border: 1px solid var(--theme-border);
-  opacity: 0.8;
 }
 
 .tiptap-markdown-editor pre::before {
   content: '```';
   position: absolute;
-  top: -1.25rem;
+  top: -1.15rem;
   left: 0;
+  font-size: 0.72rem;
   color: var(--theme-text);
-  font-size: 0.75rem;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s ease;
 }
 
 .tiptap-markdown-editor pre::after {
   content: '```';
   position: absolute;
-  bottom: -1.25rem;
+  bottom: -1.15rem;
   left: 0;
+  font-size: 0.72rem;
   color: var(--theme-text);
-  font-size: 0.75rem;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s ease;
 }
 
-.tiptap-markdown-editor pre:focus-within::before,
 .tiptap-markdown-editor pre:hover::before,
-.tiptap-markdown-editor pre:focus-within::after,
-.tiptap-markdown-editor pre:hover::after {
-  opacity: 0.5;
+.tiptap-markdown-editor pre:hover::after,
+.tiptap-markdown-editor pre:focus-within::before,
+.tiptap-markdown-editor pre:focus-within::after {
+  opacity: 0.45;
+}
+
+.tiptap-markdown-editor pre code,
+.tiptap-markdown-editor code {
+  font-family: var(--font-mono);
 }
 
 .tiptap-markdown-editor pre code {
-  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
   font-size: 0.875rem;
-  color: var(--theme-text);
   background: transparent;
   padding: 0;
 }
 
-/* 行内代码 */
 .tiptap-markdown-editor code {
-  font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
   font-size: 0.875em;
-  background: rgba(128, 128, 128, 0.1);
+  background: color-mix(in srgb, var(--theme-text) 9%, transparent);
   color: var(--theme-text);
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
 }
 
-/* 列表 */
-.tiptap-markdown-editor ul {
+.tiptap-markdown-editor ul,
+.tiptap-markdown-editor ol {
   margin: 0.75rem 0;
   padding-left: 1.5rem;
+}
+
+.tiptap-markdown-editor ul {
   list-style-type: disc;
 }
 
 .tiptap-markdown-editor ol {
-  margin: 0.75rem 0;
-  padding-left: 1.5rem;
   list-style-type: decimal;
 }
 
@@ -208,48 +191,32 @@
   margin: 0;
 }
 
-/* 分割线 */
 .tiptap-markdown-editor hr {
   margin: 1.5rem 0;
-  border: none;
-  border-top: 2px solid var(--theme-border);
-  opacity: 0.3;
+  border: 0;
+  border-top: 2px dashed var(--theme-border-soft);
 }
 
-/* 链接 */
 .tiptap-markdown-editor a {
   color: var(--theme-text);
   text-decoration: underline;
+  text-decoration-style: dotted;
   cursor: pointer;
-  opacity: 0.8;
 }
 
-.tiptap-markdown-editor a:hover {
-  opacity: 1;
-}
-
-/* 粗体和斜体 */
 .tiptap-markdown-editor strong {
-  font-weight: 600;
-  color: var(--theme-text);
-}
-
-.tiptap-markdown-editor em {
-  font-style: italic;
+  font-weight: 650;
 }
 
 .tiptap-markdown-editor s {
-  text-decoration: line-through;
-  color: var(--theme-text);
-  opacity: 0.6;
+  opacity: 0.65;
 }
 
-/* Placeholder 样式 */
 .tiptap-markdown-editor p.is-empty::before {
   content: attr(data-placeholder);
   float: left;
   color: var(--theme-text);
-  opacity: 0.4;
+  opacity: 0.38;
   pointer-events: none;
   height: 0;
 }
@@ -257,25 +224,21 @@
 .tiptap-markdown-editor.is-editor-empty::before {
   content: attr(data-placeholder);
   color: var(--theme-text);
-  opacity: 0.4;
+  opacity: 0.38;
   pointer-events: none;
   position: absolute;
 }
 
-/* 选中状态 */
 .tiptap-markdown-editor ::selection {
-  background: var(--theme-text);
-  color: var(--theme-bg);
-  opacity: 0.2;
+  background: var(--theme-selection-bg);
+  color: var(--theme-selection-text);
 }
 
-/* ===== 斜杠命令样式 ===== */
-
 .slash-commands-list {
-  background: var(--theme-bg);
+  background: var(--theme-surface);
   border-radius: 0.5rem;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-  border: 1px solid var(--theme-border);
+  border: 1px dashed var(--theme-border-soft);
+  box-shadow: 0 8px 20px rgba(16, 16, 16, 0.14);
   padding: 0.5rem;
   min-width: 220px;
   max-height: 300px;
@@ -300,12 +263,12 @@
   border-radius: 0.375rem;
   cursor: pointer;
   text-align: left;
-  transition: background 0.15s;
+  transition: background 0.15s ease;
 }
 
 .slash-command-item:hover,
 .slash-command-item.is-selected {
-  background: rgba(128, 128, 128, 0.1);
+  background: color-mix(in srgb, var(--theme-text) 9%, transparent);
 }
 
 .slash-command-icon {
@@ -314,7 +277,7 @@
   justify-content: center;
   width: 2rem;
   height: 2rem;
-  background: rgba(128, 128, 128, 0.1);
+  background: color-mix(in srgb, var(--theme-text) 9%, transparent);
   border-radius: 0.375rem;
   color: var(--theme-text);
 }
@@ -331,17 +294,16 @@
 
 .slash-command-title {
   font-size: 0.875rem;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--theme-text);
 }
 
 .slash-command-description {
   font-size: 0.75rem;
   color: var(--theme-text);
-  opacity: 0.6;
+  opacity: 0.62;
 }
 
-/* Tippy 主题 */
 .tippy-box[data-theme~='slash-commands'] {
   background: transparent;
   padding: 0;
@@ -351,10 +313,8 @@
   padding: 0;
 }
 
-/* ===== Diff 样式 ===== */
-
 .diff-addition {
-  background-color: rgba(0, 255, 0, 0.15);
+  background-color: rgba(22, 163, 74, 0.2);
   color: var(--theme-text);
   text-decoration: none;
   padding: 1px 2px;
@@ -362,10 +322,10 @@
 }
 
 .diff-deletion {
-  background-color: rgba(255, 0, 0, 0.15);
+  background-color: rgba(220, 38, 38, 0.2);
   color: var(--theme-text);
   text-decoration: line-through;
-  opacity: 0.7;
+  opacity: 0.75;
   padding: 1px 2px;
   border-radius: 2px;
 }

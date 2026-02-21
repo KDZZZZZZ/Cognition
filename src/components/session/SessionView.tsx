@@ -81,11 +81,17 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
   };
 
   return (
-    <div className="flex flex-col h-full bg-theme-bg/30">
+    <div
+      className="flex flex-col h-full"
+      style={{ backgroundColor: 'var(--theme-surface-muted)' }}
+    >
       {/* Header */}
-      <div className="bg-theme-bg border-b border-theme-border/20 px-4 py-2 shadow-sm z-10">
+      <div
+        className="border-b border-theme-border/30 paper-divider-dashed px-4 py-2 shadow-[0_1px_0_rgba(16,16,16,0.05)] z-10"
+        style={{ backgroundColor: 'var(--theme-surface)' }}
+      >
         <div className="flex items-center justify-between mb-2">
-          <div className="text-xs font-bold text-theme-text/60 uppercase tracking-wider flex items-center gap-2">
+          <div className="text-xs font-semibold tracking-[0.08em] text-theme-text/60 uppercase flex items-center gap-2">
             <Bot size={14} /> <span>AI Assistant</span>
           </div>
           <div className="flex items-center gap-2">
@@ -222,7 +228,10 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-theme-border/20 bg-theme-bg">
+      <div
+        className="p-4 border-t border-theme-border/30 paper-divider-dashed"
+        style={{ backgroundColor: 'var(--theme-surface)' }}
+      >
         <div className="relative">
           <textarea
             value={input}
