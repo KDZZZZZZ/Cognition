@@ -37,6 +37,9 @@ export function useWebSocket(sessionId: string) {
           if (message.type === 'diff_event_created') {
             // Notify interested views to refresh pending diff state.
             window.dispatchEvent(new CustomEvent('diff-event-created', { detail: message.data }));
+          } else if (message.type === 'task_progress') {
+            // Stream task progress/events into chat timeline.
+            window.dispatchEvent(new CustomEvent('agent-task-event', { detail: message.data }));
           } else if (message.type === 'file_update') {
             // Legacy support: clear outdated manual diff state.
             clearDiff();

@@ -36,12 +36,36 @@ export interface DocumentChunk {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'task_event';
   content: string;
   timestamp: string;
   tool_calls?: any[];
-  tool_results?: any[];
+  tool_results?: any;
   citations?: any[];
+}
+
+export type TaskStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'cancelling';
+
+export interface TaskEventPayload {
+  event_id: string;
+  session_id: string;
+  task_id: string;
+  event_type: string;
+  stage: string;
+  message: string;
+  progress?: number | null;
+  status: TaskStatus;
+  timestamp: string;
+  payload?: Record<string, any>;
+}
+
+export interface ChatCompletionOptions {
+  permissions?: Record<string, 'read' | 'write' | 'none'>;
+  taskId?: string;
+  signal?: AbortSignal;
+  activeFileId?: string;
+  activePage?: number;
+  compactMode?: 'auto' | 'off' | 'force';
 }
 
 export interface FileVersion {
@@ -91,11 +115,12 @@ class ApiClient {
     return response.json();
   }
 
-  async post(endpoint: string, body?: any): Promise<ApiResponse> {
+  async post(endpoint: string, body?: any, init?: RequestInit): Promise<ApiResponse> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       method: 'POST',
       headers: body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
       body: body instanceof FormData ? body : JSON.stringify(body),
+      signal: init?.signal,
     });
     return response.json();
   }
@@ -246,16 +271,31 @@ class ApiClient {
     contextFiles: string[] = [],
     model = 'qwen-plus',
     useTools = true,
-    permissions?: Record<string, 'read' | 'write' | 'none'>
+    options?: ChatCompletionOptions
   ): Promise<ApiResponse> {
-    return this.post('/api/v1/chat/completions', {
+    const payload: Record<string, any> = {
       session_id: sessionId,
       message,
       context_files: contextFiles,
       model,
       use_tools: useTools,
-      permissions,
-    });
+    };
+    if (options?.permissions) payload.permissions = options.permissions;
+    if (options?.taskId) payload.task_id = options.taskId;
+    if (options?.activeFileId) payload.active_file_id = options.activeFileId;
+    if (typeof options?.activePage === 'number') payload.active_page = options.activePage;
+    if (options?.compactMode) payload.compact_mode = options.compactMode;
+
+    return this.post(
+      '/api/v1/chat/completions',
+      payload,
+      { signal: options?.signal }
+    );
+  }
+
+  async cancelTask(sessionId: string, taskId: string): Promise<ApiResponse> {
+    const query = `?session_id=${encodeURIComponent(sessionId)}`;
+    return this.post(`/api/v1/chat/tasks/${encodeURIComponent(taskId)}/cancel${query}`);
   }
 
   async getSession(sessionId: string): Promise<ApiResponse> {

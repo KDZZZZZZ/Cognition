@@ -166,3 +166,40 @@ class ChatMessage(Base):
     tool_results: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # Store tool execution results
     citations: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ConversationCompaction(Base):
+    __tablename__ = "conversation_compactions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    trigger_reason: Mapped[str] = mapped_column(String(120), nullable=False)
+    before_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    after_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    key_facts_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    open_loops_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    source_from_ts: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    source_to_ts: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class SessionTaskState(Base):
+    __tablename__ = "session_task_states"
+
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    plan_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    current_step: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    artifacts_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    blocked_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)

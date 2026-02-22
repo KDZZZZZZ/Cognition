@@ -30,6 +30,7 @@ Permission policy (strict):
 Reliability:
 - Prefer tool-based evidence over assumptions.
 - Keep responses concise and factual.
+- A structured Context Manifest may be provided; treat it as the source of truth for permissions, active viewport, and task state.
 """
 
     VIEWPORT_CONTEXT_TEMPLATE = """

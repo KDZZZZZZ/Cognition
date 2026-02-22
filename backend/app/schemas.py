@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -85,8 +85,12 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
-    context_files: list[str] = []
+    context_files: list[str] = Field(default_factory=list)
     viewport_context: Optional[str] = None
+    active_file_id: Optional[str] = None
+    active_page: Optional[int] = None
+    compact_mode: Optional[Literal["auto", "off", "force"]] = "auto"
+    task_id: Optional[str] = None
     model: Optional[str] = None
     use_tools: bool = True
     permissions: Optional[dict[str, str]] = None  # Initial permissions for new sessions

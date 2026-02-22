@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Bot, Send, Loader2, CloudOff, Check } from 'lucide-react';
+import { Bot, Send, Loader2, CloudOff, Check, Activity, RotateCcw, Square } from 'lucide-react';
 import { PermissionToggle } from '../ui/PermissionToggle';
 import { FileIcon } from '../ui/FileIcon';
 import { Tab, Permission } from '../../types';
@@ -16,9 +16,22 @@ interface SessionViewProps {
 }
 
 export function SessionView({ sessionId, allFiles, permissions, onTogglePermission }: SessionViewProps) {
-  const { getMessagesForSession, loading, error, sendMessageForSession, loadSessionMessages } = useChatStore();
+  const {
+    getMessagesForSession,
+    isSessionLoading,
+    getActiveTask,
+    error,
+    sendMessageForSession,
+    loadSessionMessages,
+    ingestTaskEvent,
+    cancelActiveTask,
+    retryLastTask,
+  } = useChatStore();
   const { loadPermissionsFromBackend, isSynced } = useSessionStore();
   const messages = getMessagesForSession(sessionId);
+  const loading = isSessionLoading(sessionId);
+  const activeTask = getActiveTask(sessionId);
+  const isTaskRunning = !!activeTask && (activeTask.status === 'running' || activeTask.status === 'cancelling');
   const [input, setInput] = useState('');
   const [connectionStatus, setConnectionStatus] = useState<'checking' | 'connected' | 'error'>('checking');
   const [syncing, setSyncing] = useState(false);
@@ -58,8 +71,21 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent;
+      const detail = custom.detail;
+      if (!detail || typeof detail !== 'object') return;
+      if (detail.session_id && detail.session_id !== sessionId) return;
+      ingestTaskEvent(sessionId, detail);
+    };
+
+    window.addEventListener('agent-task-event', handler);
+    return () => window.removeEventListener('agent-task-event', handler);
+  }, [ingestTaskEvent, sessionId]);
+
   const handleSend = useCallback(async () => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() || loading || isTaskRunning) return;
 
     const message = input;
     setInput('');
@@ -71,7 +97,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
 
     await sendMessageForSession(sessionId, message, contextFiles);
     window.dispatchEvent(new CustomEvent('assistant-message-finished', { detail: { sessionId } }));
-  }, [allFiles, input, loading, permissions, sessionId, sendMessageForSession]);
+  }, [allFiles, input, isTaskRunning, loading, permissions, sessionId, sendMessageForSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -168,6 +194,39 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
 
       {/* Messages */}
       <div className="flex-1 p-4 overflow-y-auto space-y-4">
+        {activeTask && (
+          <div className="border border-theme-border/25 rounded-md bg-theme-bg px-3 py-2 text-xs text-theme-text/80 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Activity size={13} className="text-theme-text/70 flex-shrink-0" />
+              <span className="truncate">
+                Task `{activeTask.taskId}` · {activeTask.stage} · {activeTask.status}
+                {typeof activeTask.progress === 'number' ? ` · ${activeTask.progress}%` : ''}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              {(activeTask.status === 'running' || activeTask.status === 'cancelling') && (
+                <button
+                  onClick={() => cancelActiveTask(sessionId)}
+                  disabled={activeTask.status === 'cancelling'}
+                  className="inline-flex items-center gap-1 px-2 py-1 border border-theme-border/25 rounded hover:bg-theme-text/10 disabled:opacity-50"
+                >
+                  <Square size={12} />
+                  {activeTask.status === 'cancelling' ? 'Cancelling' : 'Cancel'}
+                </button>
+              )}
+              {(activeTask.status === 'failed' || activeTask.status === 'cancelled') && (
+                <button
+                  onClick={() => retryLastTask(sessionId)}
+                  className="inline-flex items-center gap-1 px-2 py-1 border border-theme-border/25 rounded hover:bg-theme-text/10"
+                >
+                  <RotateCcw size={12} />
+                  Retry
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {messages.length === 0 && (
           <div className="flex gap-3">
             <div className="w-8 h-8 rounded-full bg-theme-text/10 flex items-center justify-center text-theme-text flex-shrink-0">
@@ -185,27 +244,48 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
           </div>
         )}
 
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-            {msg.role === 'assistant' && (
-              <div className="w-8 h-8 rounded-full bg-theme-text/10 flex items-center justify-center text-theme-text flex-shrink-0">
-                <Bot size={18} />
+        {messages.map((msg) => {
+          if (msg.role === 'task_event') {
+            const taskMeta = (msg.tool_results && (msg.tool_results as any).task_event) || null;
+            return (
+              <div key={msg.id} className="pl-3 border-l-2 border-theme-border/35 text-sm text-theme-text/75">
+                <div className="text-[11px] uppercase tracking-[0.06em] text-theme-text/45">
+                  Agent Action{taskMeta?.stage ? ` · ${taskMeta.stage}` : ''}{typeof taskMeta?.progress === 'number' ? ` · ${taskMeta.progress}%` : ''}
+                </div>
+                <div className="whitespace-pre-wrap">{msg.content}</div>
               </div>
-            )}
-            <div className={`max-w-[85%] ${
-              msg.role === 'user'
-                ? 'bg-theme-text text-theme-bg rounded-lg rounded-tr-none px-4 py-2'
-                : 'bg-theme-bg p-3 rounded-lg rounded-tl-none border border-theme-border/20 shadow-sm text-sm text-theme-text/80'
-            }`}>
-              {msg.role === 'assistant' && msg.tool_calls && (
-                <div className="text-xs text-theme-text/60 mb-2 pb-2 border-b border-theme-border/10">
-                  <span className="font-medium">Used tools:</span> {msg.tool_calls.map((t: any) => t.name).join(', ')}
+            );
+          }
+
+          return (
+            <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+              {msg.role === 'assistant' && (
+                <div className="w-8 h-8 rounded-full bg-theme-text/10 flex items-center justify-center text-theme-text flex-shrink-0">
+                  <Bot size={18} />
                 </div>
               )}
-              <div className="whitespace-pre-wrap">{msg.content}</div>
+              <div className={`max-w-[85%] ${
+                msg.role === 'user'
+                  ? 'bg-theme-text text-theme-bg rounded-lg rounded-tr-none px-4 py-2'
+                  : 'bg-theme-bg p-3 rounded-lg rounded-tl-none border border-theme-border/20 shadow-sm text-sm text-theme-text/80'
+              }`}>
+                {msg.role === 'assistant' && msg.tool_calls && (
+                  <div className="text-xs text-theme-text/60 mb-2 pb-2 border-b border-theme-border/10">
+                    <span className="font-medium">Used tools:</span> {msg.tool_calls.map((t: any) => t?.name || t?.function?.name || 'unknown').join(', ')}
+                  </div>
+                )}
+                <div className="whitespace-pre-wrap">{msg.content}</div>
+              </div>
             </div>
+          );
+        })}
+
+        {isTaskRunning && (
+          <div className="pl-3 border-l-2 border-theme-border/35 text-sm text-theme-text/70 flex items-center gap-2">
+            <Loader2 size={14} className="animate-spin text-theme-text/70" />
+            <span>Task running...</span>
           </div>
-        ))}
+        )}
 
         {loading && (
           <div className="flex gap-3">
@@ -240,14 +320,14 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
             placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
             className="w-full pl-4 pr-10 py-2.5 border border-theme-border/30 bg-theme-bg text-theme-text rounded-lg focus:outline-none focus:ring-2 focus:ring-theme-text/20 text-sm resize-none placeholder:text-theme-text/30"
             rows={2}
-            disabled={loading}
+            disabled={loading || isTaskRunning}
           />
           <button
             onClick={handleSend}
-            disabled={loading || !input.trim()}
+            disabled={loading || isTaskRunning || !input.trim()}
             className="absolute right-2 bottom-2 p-1.5 text-theme-text hover:bg-theme-text/10 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            {loading || isTaskRunning ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
           </button>
         </div>
       </div>

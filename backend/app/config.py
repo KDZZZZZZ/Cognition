@@ -54,6 +54,15 @@ class Settings(BaseSettings):
     # Vector Store
     CHROMA_PERSIST_DIR: str = "chroma_db"
 
+    # Context & Compaction
+    AUTO_COMPACT_ENABLED: bool = True
+    TASK_STATE_MACHINE_ENABLED: bool = True
+    COMPACT_TRIGGER_TOKENS: int = 80000
+    COMPACT_FORCE_TOKENS: int = 110000
+    COMPACT_TARGET_TOKENS: int = 55000
+    DOC_CONTEXT_BUDGET_TOKENS: int = 18000
+    VIEWPORT_EXCERPT_MAX_CHARS: int = 2400
+
     # CORS
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",

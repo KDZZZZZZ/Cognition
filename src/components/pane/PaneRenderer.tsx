@@ -50,7 +50,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const { getFileContent, updateFileContent, files } = useFileStore();
   const { permissions: allPermissions, togglePermission, setPermission } = useSessionStore();
   const { setActiveTab, closeTab, reorderTabs, moveTabToPane, openTab, getAllOpenTabs, closePane, createPane, setTabMode } = usePaneStore();
-  const { sessionId } = useChatStore();
+  const { sessionId, setSessionId } = useChatStore();
   const { addVersion } = useVersionStore();
   const { activeDiff, clearDiff } = useDiffStore();
 
@@ -97,6 +97,12 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       }
     }
   }, [activeTab, sessionId, currentPage]);
+
+  useEffect(() => {
+    if (isActive && activeTab?.type === 'session') {
+      setSessionId(activeTab.id);
+    }
+  }, [isActive, activeTab?.id, activeTab?.type, setSessionId]);
 
   // Load file content when tab changes
   useEffect(() => {
@@ -193,6 +199,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
 
     openTab(pane.id, newTab);
     setActiveTab(pane.id, newId);
+    setSessionId(newId);
 
     // Initialize default permissions for all currently open files
     const openTabs = getAllOpenTabs();
