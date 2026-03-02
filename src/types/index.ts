@@ -1,5 +1,5 @@
 // Core Types
-export type FileType = 'folder' | 'md' | 'pdf' | 'code' | 'session' | 'image';
+export type FileType = 'folder' | 'md' | 'pdf' | 'web' | 'code' | 'session' | 'image' | 'txt' | 'docx';
 
 export type Permission = 'read' | 'write' | 'none';
 

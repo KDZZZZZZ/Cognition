@@ -2,10 +2,11 @@ import difflib
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import desc, select
 
@@ -13,9 +14,13 @@ from app.database import get_db
 from app.models import (
     Author,
     ChangeType,
+    DocumentAsset,
     DiffEvent,
     DiffEventStatus,
     DiffLineSnapshot,
+    DocumentPageAsset,
+    DocumentSegment,
+    FileIndexStatus,
     DocumentChunk,
     File as FileModel,
     LineDecision,
@@ -30,13 +35,115 @@ from app.schemas import (
     FileUpdate,
     FolderCreateRequest,
     MoveFileRequest,
+    ReindexRequest,
+    WebImportRequest,
 )
 from app.services.document_parser import parser
+from app.services.diff_events import get_effective_diff_base, resolve_all_pending_diff_events
 from app.services.llm_service import llm_service
+from app.services.multiformat_document_service import reader_orchestrator
+from app.services.visual_retrieval_service import visual_retrieval_service
 from app.services.vector_store import vector_store
 from app.config import settings
 
 router = APIRouter(prefix="/files", tags=["files"])
+
+INDEX_REQUIRED_FILE_TYPES = {"pdf", "md", "txt", "docx", "web"}
+
+
+def _to_public_upload_url(file_path: Path) -> Optional[str]:
+    if not file_path.exists():
+        return None
+
+    try:
+        uploads_root = Path(settings.UPLOAD_DIR).resolve()
+        resolved = file_path.resolve()
+        relative_path = resolved.relative_to(uploads_root).as_posix()
+        return f"/uploads/{relative_path}"
+    except Exception:
+        # Fallback: best effort for legacy paths.
+        return f"/uploads/{file_path.name}"
+
+
+def _parse_bbox_filter(raw_bbox: Optional[str]) -> Optional[tuple[float, float, float, float]]:
+    if not raw_bbox:
+        return None
+    try:
+        parts = [float(item.strip()) for item in str(raw_bbox).split(",")]
+    except Exception:
+        return None
+    if len(parts) != 4:
+        return None
+    return parts[0], parts[1], parts[2], parts[3]
+
+
+def _normalize_bbox(value: object) -> Optional[tuple[float, float, float, float]]:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        return float(value[0]), float(value[1]), float(value[2]), float(value[3])
+    except Exception:
+        return None
+
+
+def _bbox_intersects(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    overlap_x = max(0.0, min(ax1, bx1) - max(ax0, bx0))
+    overlap_y = max(0.0, min(ay1, by1) - max(ay0, by0))
+    return overlap_x > 0 and overlap_y > 0
+
+
+def _file_type_to_str(file_type: object) -> str:
+    return file_type.value if hasattr(file_type, "value") else str(file_type)
+
+
+def _requires_index_ready(file_type: str) -> bool:
+    return str(file_type or "").lower() in INDEX_REQUIRED_FILE_TYPES
+
+
+def _is_index_ready(index_status: dict[str, Any]) -> bool:
+    parse_status = str(index_status.get("parse_status") or "").lower()
+    embedding_status = str(index_status.get("embedding_status") or "").lower()
+    return parse_status == "ready" and embedding_status in {"ready", "ready_with_errors"}
+
+
+def _format_index_failure(index_status: dict[str, Any]) -> str:
+    parse_status = str(index_status.get("parse_status") or "unknown")
+    embedding_status = str(index_status.get("embedding_status") or "unknown")
+    last_error = str(index_status.get("last_error") or "").strip()
+    message = f"Index build did not finish (parse={parse_status}, embedding={embedding_status})"
+    if last_error:
+        message = f"{message}: {last_error}"
+    return message
+
+
+async def _cleanup_partial_upload(
+    *,
+    db: AsyncSession,
+    file_id: Optional[str],
+    upload_path: Optional[Path],
+) -> None:
+    try:
+        await db.rollback()
+    except Exception:
+        pass
+
+    if file_id:
+        try:
+            await vector_store.delete_by_file(file_id)
+        except Exception:
+            pass
+        try:
+            await vector_store.delete_segment_embeddings_by_file(file_id)
+        except Exception:
+            pass
+
+    if upload_path:
+        try:
+            upload_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _build_diff_line_snapshots(old_content: str, new_content: str) -> list[dict]:
@@ -83,6 +190,80 @@ def _compose_content_from_line_snapshots(snapshots: list[DiffLineSnapshot]) -> s
         if chosen is not None:
             final_lines.append(chosen)
     return "\n".join(final_lines)
+
+
+async def _get_latest_pending_diff_event(db: AsyncSession, file_id: str) -> Optional[DiffEvent]:
+    result = await db.execute(
+        select(DiffEvent)
+        .where(DiffEvent.file_id == file_id, DiffEvent.status == DiffEventStatus.PENDING)
+        .order_by(desc(DiffEvent.created_at))
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _get_diff_event_lines(db: AsyncSession, event_id: str) -> list[DiffLineSnapshot]:
+    result = await db.execute(
+        select(DiffLineSnapshot)
+        .where(DiffLineSnapshot.event_id == event_id)
+        .order_by(DiffLineSnapshot.line_no)
+    )
+    return list(result.scalars().all())
+
+
+async def _resolve_pending_diff_as_superseded(
+    db: AsyncSession,
+    event: DiffEvent,
+) -> str:
+    lines = await _get_diff_event_lines(db, event.id)
+    composed_content = _compose_content_from_line_snapshots(lines)
+    event.status = DiffEventStatus.RESOLVED
+    event.resolved_at = datetime.utcnow()
+    event.new_content = composed_content
+    return composed_content
+
+
+async def _finalize_diff_event_record(
+    db: AsyncSession,
+    file: FileModel,
+    event: DiffEvent,
+    lines: list[DiffLineSnapshot],
+    final_content: str,
+    summary: Optional[str],
+    author: Author,
+) -> Version:
+    file_path = Path(file.path)
+    if not file_path.exists():
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
+        await f.write(final_content)
+
+    file.size = len(final_content.encode("utf-8"))
+    file.updated_at = datetime.utcnow()
+
+    for line in lines:
+        if line.decision == LineDecision.PENDING:
+            line.decision = LineDecision.ACCEPTED
+            line.resolved_at = datetime.utcnow()
+
+    version = Version(
+        id=str(uuid.uuid4()),
+        file_id=file.id,
+        author=author,
+        change_type=ChangeType.EDIT,
+        summary=summary or "Finalize diff event",
+        diff_patch=_build_unified_diff(event.old_content, final_content),
+        context_snapshot=event.old_content,
+    )
+    db.add(version)
+
+    event.status = DiffEventStatus.RESOLVED
+    event.resolved_at = datetime.utcnow()
+    event.new_content = final_content
+
+    await db.commit()
+    return version
 
 
 def _build_unified_diff(old_content: str, new_content: str) -> str:
@@ -167,47 +348,88 @@ async def upload_file(
         ".doc": "docx",
         ".md": "md",
         ".txt": "txt",
+        ".html": "web",
+        ".htm": "web",
         ".png": "image",
         ".jpg": "image",
         ".jpeg": "image",
     }
     file_type = file_type_map.get(file_ext, "txt")
 
-    # Parse document
-    chunks, metadata = await parser.parse_file(str(upload_path), file_id, file_type)
+    if _requires_index_ready(file_type):
+        embedding_backend_ready = reader_orchestrator.embedding_provider.is_enabled() and vector_store.enabled
+        if not embedding_backend_ready:
+            await _cleanup_partial_upload(db=db, file_id=None, upload_path=upload_path)
+            raise HTTPException(
+                status_code=503,
+                detail="Embedding/index backend is unavailable. Verify the embedding model and vector store, then retry the upload.",
+            )
 
-    # Create file record first and flush to avoid FK ordering issues on chunks insert.
-    db_file = FileModel(
-        id=file_id,
-        name=file.filename,
-        file_type=file_type,
-        path=str(upload_path),
-        size=len(content),
-        page_count=metadata.get("page_count"),
-        meta=metadata,
-        parent_id=parent_id
-    )
-    db.add(db_file)
-    await db.flush()
+    db_file: Optional[FileModel] = None
+    chunks = []
+    metadata: dict[str, Any] = {}
+    visual_assets = []
+    index_status: dict[str, Any] = {}
+    public_url = _to_public_upload_url(upload_path)
 
-    # Calculate public URL
-    public_url = f"/uploads/{upload_path.name}"
+    try:
+        # Parse document
+        chunks, metadata = await parser.parse_file(str(upload_path), file_id, file_type)
 
-    # Save chunks and generate embeddings
-    if chunks:
-        for chunk in chunks:
-            db.add(chunk)
+        # Create file record first and flush to avoid FK ordering issues on chunks insert.
+        db_file = FileModel(
+            id=file_id,
+            name=file.filename,
+            file_type=file_type,
+            path=str(upload_path),
+            size=len(content),
+            page_count=metadata.get("page_count"),
+            meta=metadata,
+            parent_id=parent_id
+        )
+        db.add(db_file)
         await db.flush()
 
-        # Best effort embedding build; hard-fail is not allowed.
-        try:
-            chunk_texts = [chunk.content for chunk in chunks]
-            embeddings = await llm_service.get_embeddings_batch(chunk_texts)
-            await vector_store.add_chunks(chunks, embeddings)
-        except Exception as e:
-            print(f"Warning: Could not generate embeddings: {e}")
+        # Save chunks and legacy chunk vectors when configured.
+        if chunks:
+            for chunk in chunks:
+                db.add(chunk)
+            await db.flush()
 
-    await db.commit()
+            if llm_service.supports_embeddings() and vector_store.enabled:
+                chunk_texts = [chunk.content for chunk in chunks]
+                embeddings = await llm_service.get_embeddings_batch(chunk_texts)
+                await vector_store.add_chunks(chunks, embeddings)
+
+        if file_type == "pdf":
+            try:
+                visual_assets = await visual_retrieval_service.ensure_page_assets(
+                    db=db,
+                    file_id=file_id,
+                    page_count_hint=metadata.get("page_count"),
+                    file_path_hint=str(upload_path),
+                    chunks_hint=chunks,
+                )
+            except Exception as e:
+                print(f"Warning: Could not build visual page assets: {e}")
+
+        if _requires_index_ready(file_type):
+            index_status = await reader_orchestrator.build_segments_for_file(
+                db=db,
+                file=db_file,
+                chunks_hint=chunks if chunks else None,
+                mode="all",
+            )
+            if not _is_index_ready(index_status):
+                raise RuntimeError(_format_index_failure(index_status))
+
+        await db.commit()
+    except HTTPException:
+        await _cleanup_partial_upload(db=db, file_id=file_id if db_file else None, upload_path=upload_path)
+        raise
+    except Exception as exc:
+        await _cleanup_partial_upload(db=db, file_id=file_id if db_file else None, upload_path=upload_path)
+        raise HTTPException(status_code=503, detail=f"Upload failed before indexing completed: {exc}")
 
     return APIResponse(
         success=True,
@@ -218,10 +440,48 @@ async def upload_file(
             "size": len(content),
             "chunks_count": len(chunks),
             "metadata": metadata,
+            "visual_page_assets": {
+                "count": len(visual_assets),
+                "sample_pages": [
+                    {"page": asset.page, "image_url": asset.image_url}
+                    for asset in visual_assets[:3]
+                ],
+            } if file_type == "pdf" else None,
+            "index_status": index_status or None,
             "url": public_url,
             "parent_id": parent_id
         }
     )
+
+
+@router.post("/import/web-url", response_model=APIResponse)
+async def import_web_url(
+    request: WebImportRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Import a webpage by URL and index it as a readable document."""
+    parent_id = request.parent_id
+    if parent_id:
+        parent_result = await db.execute(
+            select(FileModel).where(FileModel.id == parent_id, FileModel.file_type == "folder")
+        )
+        if not parent_result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="Parent folder not found or is not a folder")
+
+    try:
+        result = await reader_orchestrator.import_web_url(
+            db=db,
+            url=request.url,
+            title=request.title,
+            tags=request.tags or [],
+            fetch_options=request.fetch_options or {},
+            parent_id=parent_id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to import webpage: {exc}")
+
+    await db.commit()
+    return APIResponse(success=True, data=result)
 
 
 @router.post("/folders", response_model=APIResponse)
@@ -294,14 +554,14 @@ async def get_file(file_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="File not found")
 
     file_path = Path(file.path)
-    url = f"/uploads/{file_path.name}" if file_path.exists() else None
+    url = _to_public_upload_url(file_path)
 
     return APIResponse(
         success=True,
         data={
             "id": file.id,
             "name": file.name,
-            "type": file.file_type.value,
+            "type": _file_type_to_str(file.file_type),
             "size": file.size,
             "page_count": file.page_count,
             "created_at": file.created_at.isoformat(),
@@ -329,8 +589,21 @@ async def get_file_content(file_id: str, db: AsyncSession = Depends(get_db)):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="File not found on disk")
 
-    if file.file_type.value in ["md", "txt"]:
+    file_type = _file_type_to_str(file.file_type)
+    if file_type in ["md", "txt"]:
         content = file_path.read_text(encoding="utf-8")
+    elif file_type == "web":
+        segments_result = await db.execute(
+            select(DocumentSegment)
+            .where(DocumentSegment.file_id == file_id)
+            .order_by(DocumentSegment.page, DocumentSegment.chunk_index)
+            .limit(400)
+        )
+        segments = segments_result.scalars().all()
+        if segments:
+            content = "\n\n".join([seg.text for seg in segments])
+        else:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
     else:
         # For PDF/DOCX, return chunks
         result = await db.execute(
@@ -364,7 +637,7 @@ async def update_file_content(
         raise HTTPException(status_code=404, detail="File not found")
 
     # Only support updating text-based files
-    if file.file_type.value not in ["md", "txt", "code"]:
+    if _file_type_to_str(file.file_type) not in ["md", "txt", "code"]:
         raise HTTPException(
             status_code=400,
             detail="Only text-based files can be edited"
@@ -481,6 +754,197 @@ async def get_file_chunks(
     )
 
 
+@router.get("/{file_id}/segments", response_model=APIResponse)
+async def get_file_segments(
+    file_id: str,
+    page: int = None,
+    section: str = None,
+    bbox: str = None,
+    segment_type: str = None,
+    source: str = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get normalized document segments (md/pdf/web)."""
+    file_result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    if not file_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    query = select(DocumentSegment).where(DocumentSegment.file_id == file_id)
+    if page is not None:
+        query = query.where(DocumentSegment.page == page)
+    if section:
+        query = query.where(DocumentSegment.section == section)
+    if segment_type:
+        query = query.where(DocumentSegment.segment_type == segment_type)
+    if source:
+        query = query.where(DocumentSegment.source == source)
+    query = query.order_by(DocumentSegment.page, DocumentSegment.chunk_index)
+
+    result = await db.execute(query)
+    rows = result.scalars().all()
+    bbox_filter = _parse_bbox_filter(bbox)
+    if bbox_filter:
+        filtered_rows = []
+        for row in rows:
+            row_bbox = _normalize_bbox(row.bbox)
+            if row_bbox and _bbox_intersects(row_bbox, bbox_filter):
+                filtered_rows.append(row)
+        rows = filtered_rows
+
+    return APIResponse(
+        success=True,
+        data={
+            "file_id": file_id,
+            "count": len(rows),
+            "segments": [
+                {
+                    "id": row.id,
+                    "source_type": row.source_type,
+                    "page": row.page,
+                    "section": row.section,
+                    "chunk_index": row.chunk_index,
+                    "segment_type": row.segment_type,
+                    "confidence": row.confidence,
+                    "source": row.source,
+                    "text": row.text,
+                    "bbox": row.bbox,
+                    "meta": row.meta,
+                }
+                for row in rows
+            ],
+        },
+    )
+
+
+@router.post("/{file_id}/reindex", response_model=APIResponse)
+async def reindex_file(
+    file_id: str,
+    request: ReindexRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Rebuild parse/embedding index for a file."""
+    file_result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    file_row = file_result.scalar_one_or_none()
+    if not file_row:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    mode = request.mode
+    try:
+        result = await reader_orchestrator.build_segments_for_file(
+            db=db,
+            file=file_row,
+            chunks_hint=None,
+            mode=mode,
+        )
+        await db.commit()
+    except OperationalError as exc:
+        await db.rollback()
+        if "database is locked" not in str(exc).lower():
+            raise
+        return APIResponse(
+            success=False,
+            error="Index warmup deferred while the workspace is busy. Retry shortly.",
+            data={
+                "file_id": file_id,
+                "mode": mode,
+                "busy": True,
+            },
+        )
+    return APIResponse(
+        success=True,
+        data={
+            "file_id": file_id,
+            "mode": mode,
+            "index_status": result,
+        },
+    )
+
+
+@router.get("/{file_id}/index-status", response_model=APIResponse)
+async def get_index_status(
+    file_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get parse/embedding index status for one file."""
+    file_result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    file_row = file_result.scalar_one_or_none()
+    if not file_row:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    status_result = await db.execute(select(FileIndexStatus).where(FileIndexStatus.file_id == file_id))
+    row = status_result.scalar_one_or_none()
+    parse_status = row.parse_status if row else "pending"
+    embedding_status = row.embedding_status if row else "pending"
+    last_error = row.last_error if row else None
+    updated_at = row.updated_at.isoformat() if row and row.updated_at else None
+
+    if parse_status == "pending":
+        segment_exists = (
+            await db.execute(select(DocumentSegment.id).where(DocumentSegment.file_id == file_id).limit(1))
+        ).first() is not None
+        chunk_exists = (
+            await db.execute(select(DocumentChunk.id).where(DocumentChunk.file_id == file_id).limit(1))
+        ).first() is not None
+        if segment_exists or chunk_exists:
+            parse_status = "ready"
+            if not updated_at and file_row.updated_at:
+                updated_at = file_row.updated_at.isoformat()
+
+    if embedding_status == "pending" and not vector_store.enabled:
+        embedding_status = "disabled"
+        if not updated_at and file_row.updated_at:
+            updated_at = file_row.updated_at.isoformat()
+
+    return APIResponse(
+        success=True,
+        data={
+            "file_id": file_id,
+            "parse_status": parse_status,
+            "embedding_status": embedding_status,
+            "last_error": last_error,
+            "updated_at": updated_at,
+        },
+    )
+
+
+@router.get("/{file_id}/page-assets", response_model=APIResponse)
+async def get_file_page_assets(
+    file_id: str,
+    page: int = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get visual page assets (page image + text anchor) for multimodal retrieval."""
+    result = await db.execute(select(FileModel).where(FileModel.id == file_id))
+    file = result.scalar_one_or_none()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    query = select(DocumentPageAsset).where(DocumentPageAsset.file_id == file_id)
+    if page is not None:
+        query = query.where(DocumentPageAsset.page == page)
+    query = query.order_by(DocumentPageAsset.page)
+
+    assets_result = await db.execute(query)
+    assets = assets_result.scalars().all()
+
+    return APIResponse(
+        success=True,
+        data={
+            "file_id": file_id,
+            "count": len(assets),
+            "assets": [
+                {
+                    "id": asset.id,
+                    "page": asset.page,
+                    "image_url": asset.image_url,
+                    "text_anchor": asset.text_anchor,
+                }
+                for asset in assets
+            ],
+        },
+    )
+
+
 @router.get("/{file_id}/versions", response_model=APIResponse)
 async def get_file_versions(
     file_id: str,
@@ -544,7 +1008,7 @@ async def create_diff_event(
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
 
-    if file.file_type.value not in ["md", "txt", "code"]:
+    if _file_type_to_str(file.file_type) not in ["md", "txt", "code"]:
         raise HTTPException(status_code=400, detail="Diff events are only supported for text files")
 
     file_path = Path(file.path)
@@ -555,7 +1019,9 @@ async def create_diff_event(
         except Exception:
             old_content = ""
 
-    if old_content == request.new_content:
+    base_content, current_content, _ = await get_effective_diff_base(db, file_id, old_content)
+
+    if current_content == request.new_content:
         return APIResponse(
             success=True,
             data={
@@ -566,11 +1032,34 @@ async def create_diff_event(
             },
         )
 
+    if base_content == request.new_content:
+        await resolve_all_pending_diff_events(
+            db,
+            file_id,
+            replacement_content=base_content,
+        )
+        await db.commit()
+        return APIResponse(
+            success=True,
+            data={
+                "event_id": None,
+                "file_id": file_id,
+                "status": "noop",
+                "message": "No net content change detected",
+            },
+        )
+
+    await resolve_all_pending_diff_events(
+        db,
+        file_id,
+        replacement_content=current_content,
+    )
+
     event = DiffEvent(
         id=str(uuid.uuid4()),
         file_id=file_id,
         author=request.author,
-        old_content=old_content,
+        old_content=base_content,
         new_content=request.new_content,
         summary=request.summary,
         status=DiffEventStatus.PENDING,
@@ -578,7 +1067,7 @@ async def create_diff_event(
     db.add(event)
     await db.flush()
 
-    snapshots = _build_diff_line_snapshots(old_content, request.new_content)
+    snapshots = _build_diff_line_snapshots(base_content, request.new_content)
     created_lines: list[dict] = []
     for item in snapshots:
         line = DiffLineSnapshot(
@@ -775,6 +1264,13 @@ async def finalize_diff_event(
     event.resolved_at = datetime.utcnow()
     event.new_content = final_content
 
+    await resolve_all_pending_diff_events(
+        db,
+        file_id,
+        replacement_content=final_content,
+        exclude_event_id=event.id,
+    )
+
     await db.commit()
 
     return APIResponse(
@@ -820,7 +1316,7 @@ async def move_file(
             raise HTTPException(status_code=400, detail="New parent folder not found or is not a folder")
 
         # Prevent moving a folder into itself or its descendants
-        if file.file_type.value == "folder":
+        if _file_type_to_str(file.file_type) == "folder":
             # Check if new_parent is a descendant of file
             current_id = new_parent_id
             visited = set()
@@ -891,12 +1387,12 @@ def build_file_tree(files: list) -> list:
     file_map = {}
     for f in files:
         file_path = Path(f.path)
-        url = f"/uploads/{file_path.name}" if file_path.exists() else None
+        url = _to_public_upload_url(file_path)
 
         file_map[f.id] = {
             "id": f.id,
             "name": f.name,
-            "type": f.file_type.value,
+            "type": _file_type_to_str(f.file_type),
             "size": f.size,
             "page_count": f.page_count,
             "created_at": f.created_at.isoformat(),
@@ -956,12 +1452,12 @@ async def list_files(
         file_list = []
         for f in files:
             file_path = Path(f.path)
-            url = f"/uploads/{file_path.name}" if file_path.exists() else None
+            url = _to_public_upload_url(file_path)
 
             file_list.append({
                 "id": f.id,
                 "name": f.name,
-                "type": f.file_type.value,
+                "type": _file_type_to_str(f.file_type),
                 "size": f.size,
                 "page_count": f.page_count,
                 "created_at": f.created_at.isoformat(),

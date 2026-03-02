@@ -12,7 +12,10 @@ engine_args = {
 }
 
 if "sqlite" in settings.DATABASE_URL:
-    engine_args["connect_args"] = {"check_same_thread": False}
+    engine_args["connect_args"] = {
+        "check_same_thread": False,
+        "timeout": 30,
+    }
 else:
     engine_args["pool_size"] = 10
     engine_args["max_overflow"] = 20
@@ -29,10 +32,9 @@ engine = create_async_engine(
 def enable_sqlite_foreign_keys(dbapi_conn, connection_record):
     """Enable foreign key support on SQLite connections."""
     if "sqlite" in settings.DATABASE_URL:
-        # For async connections, we need to handle the coroutine properly
-        # Just execute the PRAGMA - errors will show in logs if it fails
         try:
-            # Try synchronous execution first
+            dbapi_conn.execute("PRAGMA journal_mode = WAL")
+            dbapi_conn.execute("PRAGMA busy_timeout = 30000")
             dbapi_conn.execute("PRAGMA foreign_keys = ON")
         except Exception as e:
             print(f"Warning: Could not enable foreign key constraints: {e}")

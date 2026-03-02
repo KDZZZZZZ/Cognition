@@ -1,27 +1,65 @@
-import chromadb
-from chromadb.config import Settings as ChromaSettings
-from typing import List, Optional
-import uuid
+from __future__ import annotations
+
+import ast
+import sys
+import warnings
+from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.models import DocumentChunk
 
+if sys.version_info >= (3, 14):
+    chromadb = None
+    ChromaSettings = None
+    _CHROMA_IMPORT_ERROR = RuntimeError("ChromaDB is disabled on Python 3.14+ due pydantic.v1 incompatibility.")
+else:
+    try:
+        import chromadb
+        from chromadb.config import Settings as ChromaSettings
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        chromadb = None
+        ChromaSettings = None
+        _CHROMA_IMPORT_ERROR = exc
+    else:
+        _CHROMA_IMPORT_ERROR = None
+
 
 class VectorStore:
-    """Vector database for semantic search using ChromaDB."""
+    """Vector database for semantic search using ChromaDB (best-effort fallback)."""
 
     def __init__(self):
-        self.client = chromadb.PersistentClient(
-            path=settings.CHROMA_PERSIST_DIR,
-            settings=ChromaSettings(
-                anonymized_telemetry=False,
-                allow_reset=True
-            )
-        )
+        self.client = None
         self._collection = None
+        self._segment_collection = None
+        self.enabled = False
+
+        if chromadb is None or ChromaSettings is None:
+            warnings.warn(
+                f"ChromaDB unavailable, semantic vector index disabled: {_CHROMA_IMPORT_ERROR}",
+                RuntimeWarning,
+            )
+            return
+
+        try:
+            self.client = chromadb.PersistentClient(
+                path=settings.CHROMA_PERSIST_DIR,
+                settings=ChromaSettings(
+                    anonymized_telemetry=False,
+                    allow_reset=True,
+                ),
+            )
+            self.enabled = True
+        except Exception as exc:  # pragma: no cover - runtime env specific
+            warnings.warn(
+                f"Failed to initialize ChromaDB client, semantic vector index disabled: {exc}",
+                RuntimeWarning,
+            )
 
     @property
     def collection(self):
+        if not self.enabled or self.client is None:
+            raise RuntimeError("ChromaDB vector index is disabled")
+
         if self._collection is None:
             self._collection = self.client.get_or_create_collection(
                 name="documents",
@@ -29,20 +67,34 @@ class VectorStore:
             )
         return self._collection
 
+    @property
+    def segment_collection(self):
+        if not self.enabled or self.client is None:
+            raise RuntimeError("ChromaDB vector index is disabled")
+
+        if self._segment_collection is None:
+            self._segment_collection = self.client.get_or_create_collection(
+                name="segment_embeddings",
+                metadata={"hnsw:space": "cosine"}
+            )
+        return self._segment_collection
+
     async def add_chunks(self, chunks: List[DocumentChunk], embeddings: List[List[float]]):
         """Add document chunks with their embeddings to the vector store."""
-        if not chunks:
+        if not self.enabled or not chunks:
             return
 
         ids = [chunk.id for chunk in chunks]
         documents = [chunk.content for chunk in chunks]
         metadatas = [
-            {
-                "file_id": chunk.file_id,
-                "page": chunk.page,
-                "chunk_index": chunk.chunk_index,
-                "bbox": str(chunk.bbox) if chunk.bbox else None
-            }
+            self._sanitize_metadata(
+                {
+                    "file_id": chunk.file_id,
+                    "page": chunk.page,
+                    "chunk_index": chunk.chunk_index,
+                    "bbox": str(chunk.bbox) if chunk.bbox else None,
+                }
+            )
             for chunk in chunks
         ]
 
@@ -66,6 +118,9 @@ class VectorStore:
         Returns:
             Dictionary with ids, distances, metadatas, and documents
         """
+        if not self.enabled:
+            return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
+
         where = {}
         if file_id:
             where["file_id"] = file_id
@@ -82,6 +137,9 @@ class VectorStore:
 
     async def delete_by_file(self, file_id: str):
         """Delete all chunks associated with a file."""
+        if not self.enabled:
+            return
+
         # ChromaDB doesn't support filtering in delete directly
         # We need to get the ids first
         results = self.collection.get(
@@ -89,6 +147,97 @@ class VectorStore:
         )
         if results and results["ids"]:
             self.collection.delete(ids=results["ids"])
+
+    async def add_segment_embeddings(
+        self,
+        *,
+        ids: List[str],
+        embeddings: List[List[float]],
+        documents: List[str],
+        metadatas: List[Dict[str, Any]],
+    ):
+        """Add segment embeddings (text/image/fused) for multimodal retrieval."""
+        if not self.enabled or not ids:
+            return
+        self.segment_collection.add(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=[self._sanitize_metadata(metadata) for metadata in metadatas],
+        )
+
+    @staticmethod
+    def _sanitize_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        clean: Dict[str, Any] = {}
+        for key, value in (metadata or {}).items():
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                clean[key] = value
+                continue
+            clean[key] = str(value)
+        return clean
+
+    def _compose_where(
+        self,
+        *,
+        file_ids: Optional[List[str]] = None,
+        modalities: Optional[List[str]] = None,
+        source_types: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        clauses: List[Dict[str, Any]] = []
+        if file_ids:
+            if len(file_ids) == 1:
+                clauses.append({"file_id": file_ids[0]})
+            else:
+                clauses.append({"file_id": {"$in": file_ids}})
+        if modalities:
+            if len(modalities) == 1:
+                clauses.append({"modality": modalities[0]})
+            else:
+                clauses.append({"modality": {"$in": modalities}})
+        if source_types:
+            if len(source_types) == 1:
+                clauses.append({"source_type": source_types[0]})
+            else:
+                clauses.append({"source_type": {"$in": source_types}})
+
+        if not clauses:
+            return None
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$and": clauses}
+
+    async def search_segment_embeddings(
+        self,
+        *,
+        query_embedding: List[float],
+        n_results: int = 10,
+        file_ids: Optional[List[str]] = None,
+        modalities: Optional[List[str]] = None,
+        source_types: Optional[List[str]] = None,
+    ) -> dict:
+        """Search segment embedding collection with optional metadata filters."""
+        if not self.enabled:
+            return {"ids": [[]], "documents": [[]], "metadatas": [[]], "distances": [[]]}
+
+        where = self._compose_where(
+            file_ids=file_ids,
+            modalities=modalities,
+            source_types=source_types,
+        )
+        return self.segment_collection.query(
+            query_embeddings=[query_embedding],
+            n_results=n_results,
+            where=where,
+        )
+
+    async def delete_segment_embeddings_by_file(self, file_id: str):
+        if not self.enabled:
+            return
+        results = self.segment_collection.get(where={"file_id": file_id})
+        if results and results.get("ids"):
+            self.segment_collection.delete(ids=results["ids"])
 
     async def get_chunks_in_bbox(
         self,
@@ -109,6 +258,9 @@ class VectorStore:
         Returns:
             List of chunk contents
         """
+        if not self.enabled:
+            return []
+
         results = self.collection.get(
             where={"file_id": file_id, "page": page}
         )
@@ -126,7 +278,7 @@ class VectorStore:
 
             # Parse bbox from string format
             try:
-                chunk_bbox = eval(chunk_bbox) if isinstance(chunk_bbox, str) else chunk_bbox
+                chunk_bbox = ast.literal_eval(chunk_bbox) if isinstance(chunk_bbox, str) else chunk_bbox
                 cx0, cy0, cx1, cy1 = chunk_bbox
 
                 # Calculate overlap
@@ -144,7 +296,8 @@ class VectorStore:
 
     def reset(self):
         """Clear all data from the vector store."""
-        self.client.reset()
+        if self.enabled and self.client is not None:
+            self.client.reset()
 
 
 vector_store = VectorStore()

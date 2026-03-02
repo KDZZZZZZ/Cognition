@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import { Pane, Tab, ViewMode } from '../types';
 
 interface PaneState {
@@ -23,49 +24,51 @@ interface PaneState {
   getAllOpenTabs: () => Tab[];
 }
 
-export const usePaneStore = create<PaneState>((set, get) => ({
-  panes: [{ id: 'default', tabs: [], activeTabId: null }],
-  activePaneId: 'default',
+export const usePaneStore = create<PaneState>()(
+  persist(
+    (set, get) => ({
+      panes: [{ id: 'default', tabs: [], activeTabId: null }],
+      activePaneId: 'default',
 
-  createPane: () => {
-    const newPaneId = Date.now().toString();
-    set((state) => ({
-      panes: [...state.panes, { id: newPaneId, tabs: [], activeTabId: null }],
-      activePaneId: newPaneId,
-    }));
-  },
+      createPane: () => {
+        const newPaneId = Date.now().toString();
+        set((state) => ({
+          panes: [...state.panes, { id: newPaneId, tabs: [], activeTabId: null }],
+          activePaneId: newPaneId,
+        }));
+      },
 
-  addPane: () => {
-    const newPaneId = Date.now().toString();
-    set((state) => ({
-      panes: [...state.panes, { id: newPaneId, tabs: [], activeTabId: null }],
-      activePaneId: newPaneId,
-    }));
-    return newPaneId;
-  },
+      addPane: () => {
+        const newPaneId = Date.now().toString();
+        set((state) => ({
+          panes: [...state.panes, { id: newPaneId, tabs: [], activeTabId: null }],
+          activePaneId: newPaneId,
+        }));
+        return newPaneId;
+      },
 
-  closePane: (paneId: string) => {
-    set((state) => {
-      if (state.panes.length === 1) {
-        return {
-          panes: [{ id: state.panes[0].id, tabs: [], activeTabId: null }],
-          activePaneId: state.panes[0].id,
-        };
-      }
+      closePane: (paneId: string) => {
+        set((state) => {
+          if (state.panes.length === 1) {
+            return {
+              panes: [{ id: state.panes[0].id, tabs: [], activeTabId: null }],
+              activePaneId: state.panes[0].id,
+            };
+          }
 
-      const newPanes = state.panes.filter((p) => p.id !== paneId);
-      const newActiveId =
-        state.activePaneId === paneId && newPanes.length > 0
-          ? newPanes[newPanes.length - 1].id
-          : state.activePaneId;
+          const newPanes = state.panes.filter((p) => p.id !== paneId);
+          const newActiveId =
+            state.activePaneId === paneId && newPanes.length > 0
+              ? newPanes[newPanes.length - 1].id
+              : state.activePaneId;
 
-      return { panes: newPanes, activePaneId: newActiveId };
-    });
-  },
+          return { panes: newPanes, activePaneId: newActiveId };
+        });
+      },
 
-  setActivePane: (paneId: string) => set({ activePaneId: paneId }),
+      setActivePane: (paneId: string) => set({ activePaneId: paneId }),
 
-  openTab: (paneId: string, tab: Tab) => {
+      openTab: (paneId: string, tab: Tab) => {
     set((state) => ({
       panes: state.panes.map((pane) => {
         if (pane.id !== paneId) return pane;
@@ -88,9 +91,9 @@ export const usePaneStore = create<PaneState>((set, get) => ({
         };
       }),
     }));
-  },
+      },
 
-  closeTab: (paneId: string, tabId: string) => {
+      closeTab: (paneId: string, tabId: string) => {
     set((state) => ({
       panes: state.panes.map((pane) => {
         if (pane.id !== paneId) return pane;
@@ -106,9 +109,9 @@ export const usePaneStore = create<PaneState>((set, get) => ({
         return { ...pane, tabs: newTabs, activeTabId: newActiveId };
       }),
     }));
-  },
+      },
 
-  closeTabInAllPanes: (tabId: string) => {
+      closeTabInAllPanes: (tabId: string) => {
     set((state) => ({
       panes: state.panes.map((pane) => {
         const newTabs = pane.tabs.filter((t) => t.id !== tabId);
@@ -122,17 +125,17 @@ export const usePaneStore = create<PaneState>((set, get) => ({
         return { ...pane, tabs: newTabs, activeTabId: newActiveId };
       }),
     }));
-  },
+      },
 
-  setActiveTab: (paneId: string, tabId: string) => {
+      setActiveTab: (paneId: string, tabId: string) => {
     set((state) => ({
       panes: state.panes.map((pane) =>
         pane.id === paneId ? { ...pane, activeTabId: tabId } : pane
       ),
     }));
-  },
+      },
 
-  setTabMode: (paneId: string, tabId: string, mode: ViewMode) => {
+      setTabMode: (paneId: string, tabId: string, mode: ViewMode) => {
     set((state) => ({
       panes: state.panes.map((pane) => {
         if (pane.id !== paneId) return pane;
@@ -145,9 +148,9 @@ export const usePaneStore = create<PaneState>((set, get) => ({
         };
       }),
     }));
-  },
+      },
 
-  reorderTabs: (paneId: string, fromIndex: number, toIndex: number) => {
+      reorderTabs: (paneId: string, fromIndex: number, toIndex: number) => {
     set((state) => ({
       panes: state.panes.map((pane) => {
         if (pane.id !== paneId) return pane;
@@ -159,9 +162,9 @@ export const usePaneStore = create<PaneState>((set, get) => ({
         return { ...pane, tabs: newTabs };
       }),
     }));
-  },
+      },
 
-  moveTabToPane: (sourcePaneId: string, targetPaneId: string, tabId: string, targetIndex?: number) => {
+      moveTabToPane: (sourcePaneId: string, targetPaneId: string, tabId: string, targetIndex?: number) => {
     set((state) => {
       const sourcePane = state.panes.find((p) => p.id === sourcePaneId);
       if (!sourcePane) return state;
@@ -186,7 +189,7 @@ export const usePaneStore = create<PaneState>((set, get) => ({
             const existingTab = pane.tabs.find((t) => t.id === tabId);
             if (existingTab) return pane;
 
-            let newTabs = [...pane.tabs, tabToMove];
+            const newTabs = [...pane.tabs, tabToMove];
             if (targetIndex !== undefined && targetIndex < newTabs.length - 1) {
               newTabs.splice(newTabs.length - 1, 1);
               newTabs.splice(targetIndex, 0, tabToMove);
@@ -199,19 +202,28 @@ export const usePaneStore = create<PaneState>((set, get) => ({
         }),
       };
     });
-  },
+      },
 
-  getActiveTab: (paneId: string) => {
-    const pane = get().panes.find((p) => p.id === paneId);
-    if (!pane) return null;
-    return pane.tabs.find((t) => t.id === pane.activeTabId) || null;
-  },
+      getActiveTab: (paneId: string) => {
+        const pane = get().panes.find((p) => p.id === paneId);
+        if (!pane) return null;
+        return pane.tabs.find((t) => t.id === pane.activeTabId) || null;
+      },
 
-  getAllOpenTabs: () => {
-    const tabMap = new Map<string, Tab>();
-    get().panes.forEach((pane) =>
-      pane.tabs.forEach((tab) => tabMap.set(tab.id, tab))
-    );
-    return Array.from(tabMap.values());
-  },
-}));
+      getAllOpenTabs: () => {
+        const tabMap = new Map<string, Tab>();
+        get().panes.forEach((pane) =>
+          pane.tabs.forEach((tab) => tabMap.set(tab.id, tab))
+        );
+        return Array.from(tabMap.values());
+      },
+    }),
+    {
+      name: 'pane-storage',
+      partialize: (state) => ({
+        panes: state.panes.length ? state.panes : [{ id: 'default', tabs: [], activeTabId: null }],
+        activePaneId: state.activePaneId || 'default',
+      }),
+    }
+  )
+);

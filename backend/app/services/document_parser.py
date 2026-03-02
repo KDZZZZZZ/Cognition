@@ -1,22 +1,19 @@
-import os
 import uuid
-import asyncio
-from typing import Optional, List
+import re
+from typing import List
 from pathlib import Path
-from unstructured.partition.auto import partition
-from unstructured.partition.pdf import partition_pdf
-from unstructured.partition.docx import partition_docx
-from unstructured.partition.md import partition_md
-from unstructured.partition.text import partition_text
 import pdfplumber
 from docx import Document as DocxDocument
 
 from app.config import settings
-from app.models import File, DocumentChunk
+from app.models import DocumentChunk
 
 
 class DocumentParser:
     """Parse various document formats and extract structured content."""
+
+    PDF_TARGET_CHUNK_CHARS = 1200
+    PDF_MAX_CHUNK_CHARS = 2400
 
     def __init__(self):
         self.upload_dir = Path(settings.UPLOAD_DIR)
@@ -44,6 +41,8 @@ class DocumentParser:
             return await self._parse_markdown(path, file_id)
         elif file_type == "txt":
             return await self._parse_text(path, file_id)
+        elif file_type == "web":
+            return await self._parse_web_html(path, file_id)
         else:
             return [], {}
 
@@ -66,6 +65,7 @@ class DocumentParser:
 
                 # Group into paragraphs based on vertical proximity
                 paragraphs = self._group_words_to_paragraphs(words)
+                paragraphs = self._merge_pdf_paragraphs(paragraphs)
 
                 for idx, para in enumerate(paragraphs):
                     chunk = DocumentChunk(
@@ -172,6 +172,41 @@ class DocumentParser:
         metadata = {"page_count": 1, "chunk_count": len(chunks)}
         return chunks, metadata
 
+    async def _parse_web_html(self, path: Path, file_id: str) -> tuple[List[DocumentChunk], dict]:
+        """Parse HTML/web snapshot file into text chunks."""
+        content = path.read_text(encoding="utf-8", errors="ignore")
+        chunks: List[DocumentChunk] = []
+
+        try:
+            from bs4 import BeautifulSoup
+        except Exception:
+            # Fallback strip tags using regex when bs4 is unavailable.
+            text = " ".join(content.replace("\n", " ").split())
+            text = re.sub(r"<[^>]+>", " ", text)
+            blocks = [blk.strip() for blk in text.split(". ") if blk.strip()]
+        else:
+            soup = BeautifulSoup(content, "html.parser")
+            nodes = soup.select("h1, h2, h3, h4, p, li, pre, code, blockquote, table")
+            blocks = []
+            for node in nodes:
+                text = " ".join(node.get_text(" ", strip=True).split())
+                if text:
+                    blocks.append(text)
+
+        for idx, block in enumerate(blocks):
+            chunk = DocumentChunk(
+                id=str(uuid.uuid4()),
+                file_id=file_id,
+                page=1,
+                chunk_index=idx,
+                content=block,
+                bbox=None,
+            )
+            chunks.append(chunk)
+
+        metadata = {"page_count": 1, "chunk_count": len(chunks), "source_type": "web"}
+        return chunks, metadata
+
     def _group_words_to_paragraphs(self, words: List[dict]) -> List[dict]:
         """Group words into paragraphs based on vertical proximity."""
         if not words:
@@ -223,6 +258,55 @@ class DocumentParser:
             })
 
         return paragraphs
+
+    def _merge_pdf_paragraphs(self, paragraphs: List[dict]) -> List[dict]:
+        """Merge short adjacent PDF paragraphs into larger semantic chunks."""
+        if not paragraphs:
+            return []
+
+        merged: List[dict] = []
+        current_texts: List[str] = []
+        current_boxes: List[tuple[float, float, float, float]] = []
+        current_chars = 0
+
+        def flush() -> None:
+            nonlocal current_texts, current_boxes, current_chars
+            if not current_texts:
+                return
+            xs0 = [box[0] for box in current_boxes]
+            ys0 = [box[1] for box in current_boxes]
+            xs1 = [box[2] for box in current_boxes]
+            ys1 = [box[3] for box in current_boxes]
+            merged.append(
+                {
+                    "text": "\n".join(current_texts),
+                    "bbox": (min(xs0), min(ys0), max(xs1), max(ys1)),
+                }
+            )
+            current_texts = []
+            current_boxes = []
+            current_chars = 0
+
+        for paragraph in paragraphs:
+            text = str(paragraph.get("text") or "").strip()
+            bbox = paragraph.get("bbox")
+            if not text or not isinstance(bbox, tuple) or len(bbox) != 4:
+                continue
+
+            next_chars = current_chars + (1 if current_texts else 0) + len(text)
+            should_flush = current_texts and current_chars >= self.PDF_TARGET_CHUNK_CHARS and next_chars > self.PDF_MAX_CHUNK_CHARS
+            if should_flush:
+                flush()
+
+            current_texts.append(text)
+            current_boxes.append(bbox)
+            current_chars += (1 if current_chars else 0) + len(text)
+
+            if current_chars >= self.PDF_MAX_CHUNK_CHARS:
+                flush()
+
+        flush()
+        return merged
 
 
 parser = DocumentParser()

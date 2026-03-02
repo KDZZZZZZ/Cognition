@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { SessionPermissions, Permission } from '../types';
+import { SessionPermissions, Permission, FileType } from '../types';
 import { api } from '../api/client';
 
 interface SessionState {
@@ -8,14 +8,18 @@ interface SessionState {
   syncStatus: Record<string, boolean>; // Track sync status per session
 
   // Actions
-  togglePermission: (sessionId: string, fileId: string) => Promise<void>;
+  togglePermission: (sessionId: string, fileId: string, fileType: FileType) => Promise<void>;
   setPermission: (sessionId: string, fileId: string, permission: Permission) => void;
   getPermission: (sessionId: string, fileId: string) => Permission;
   getSessionPermissions: (sessionId: string) => Record<string, Permission>;
   clearSessionPermissions: (sessionId: string) => void;
 
   // Sync with backend
-  syncPermissionsToBackend: (sessionId: string, fileId: string, permission: Permission) => Promise<boolean>;
+  syncPermissionsToBackend: (
+    sessionId: string,
+    fileId: string,
+    permission: Permission
+  ) => Promise<{ success: boolean; effectivePermission?: Permission }>;
   loadPermissionsFromBackend: (sessionId: string) => Promise<void>;
   syncAllPermissionsForSession: (sessionId: string, fileIds: string[]) => Promise<void>;
   isSynced: (sessionId: string) => boolean;
@@ -27,11 +31,19 @@ export const useSessionStore = create<SessionState>()(
       permissions: {},
       syncStatus: {}, // Track which sessions have been synced with backend
 
-      togglePermission: async (sessionId: string, fileId: string) => {
+      togglePermission: async (sessionId: string, fileId: string, fileType: FileType) => {
         const sessionData = get().permissions[sessionId] || {};
-        const current = sessionData[fileId] || 'read';
-        const next: Permission =
-          current === 'read' ? 'write' : current === 'write' ? 'none' : 'read';
+        const currentRaw = sessionData[fileId] || 'read';
+        const current: Permission =
+          fileType === 'md'
+            ? currentRaw
+            : currentRaw === 'write'
+              ? 'read'
+              : currentRaw;
+
+        const next: Permission = fileType === 'md'
+          ? (current === 'read' ? 'write' : current === 'write' ? 'none' : 'read')
+          : (current === 'read' ? 'none' : 'read');
 
         // Optimistic update: update local state first
         set((state) => ({
@@ -49,9 +61,9 @@ export const useSessionStore = create<SessionState>()(
         }));
 
         // Sync to backend
-        const success = await get().syncPermissionsToBackend(sessionId, fileId, next);
+        const syncResult = await get().syncPermissionsToBackend(sessionId, fileId, next);
 
-        if (!success) {
+        if (!syncResult.success) {
           // Rollback on failure
           set((state) => ({
             permissions: {
@@ -62,7 +74,19 @@ export const useSessionStore = create<SessionState>()(
               },
             },
           }));
+          return;
         }
+
+        const effectivePermission: Permission = syncResult.effectivePermission || next;
+        set((state) => ({
+          permissions: {
+            ...state.permissions,
+            [sessionId]: {
+              ...(state.permissions[sessionId] || {}),
+              [fileId]: effectivePermission,
+            },
+          },
+        }));
       },
 
       setPermission: (sessionId: string, fileId: string, permission: Permission) => {
@@ -99,7 +123,11 @@ export const useSessionStore = create<SessionState>()(
         });
       },
 
-      syncPermissionsToBackend: async (sessionId: string, fileId: string, permission: Permission): Promise<boolean> => {
+      syncPermissionsToBackend: async (
+        sessionId: string,
+        fileId: string,
+        permission: Permission
+      ): Promise<{ success: boolean; effectivePermission?: Permission }> => {
         try {
           const response = await api.updatePermissions(sessionId, fileId, permission);
           if (response.success) {
@@ -109,12 +137,13 @@ export const useSessionStore = create<SessionState>()(
                 [sessionId]: true,
               },
             }));
-            return true;
+            const effectivePermission = (response.data?.permission as Permission | undefined) || permission;
+            return { success: true, effectivePermission };
           }
-          return false;
+          return { success: false };
         } catch (error) {
           console.error('Failed to sync permissions to backend:', error);
-          return false;
+          return { success: false };
         }
       },
 
@@ -171,6 +200,10 @@ export const useSessionStore = create<SessionState>()(
           const response = await api.bulkUpdatePermissions(sessionId, permissionsToSync);
           if (response.success) {
             set((state) => ({
+              permissions: {
+                ...state.permissions,
+                [sessionId]: response.data?.permissions || permissionsToSync,
+              },
               syncStatus: {
                 ...state.syncStatus,
                 [sessionId]: true,

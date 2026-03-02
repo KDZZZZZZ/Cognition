@@ -18,10 +18,6 @@ import {
   Quote,
   Code,
   Minus,
-  CheckSquare,
-  Table,
-  Image,
-  Link,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -34,7 +30,7 @@ interface CommandItem {
 }
 
 // 斜杠命令列表
-const commands: CommandItem[] = [
+export const commands: CommandItem[] = [
   {
     title: 'Heading 1',
     description: '大标题',
@@ -111,7 +107,7 @@ interface CommandListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;
 }
 
-const CommandList = forwardRef<CommandListRef, CommandListProps>(
+export const CommandList = forwardRef<CommandListRef, CommandListProps>(
   ({ items, command }, ref) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -285,5 +281,3 @@ export const SlashCommands = Extension.create({
     ];
   },
 });
-
-export default SlashCommands;

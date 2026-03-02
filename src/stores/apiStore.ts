@@ -15,7 +15,7 @@ interface FileState {
   // Actions
   loadFiles: () => Promise<void>;
   selectFile: (file: FileMetadata | null) => void;
-  uploadFile: (file: File) => Promise<string | null>;
+  uploadFile: (file: File, parentId?: string | null) => Promise<string | null>;
   getFileContent: (fileId: string) => Promise<string | null>;
   setFileContent: (fileId: string, content: string) => void;
   updateFileContent: (fileId: string, content: string) => Promise<boolean>;
@@ -51,10 +51,10 @@ export const useFileStore = create<FileState>((set, get) => ({
 
   selectFile: (file) => set({ selectedFile: file }),
 
-  uploadFile: async (file) => {
+  uploadFile: async (file, parentId) => {
     set({ loading: true, error: null });
     try {
-      const response = await api.uploadFile(file);
+      const response = await api.uploadFile(file, parentId);
       if (response.success && response.data) {
         const fileId = response.data.file_id;
         // Reload files

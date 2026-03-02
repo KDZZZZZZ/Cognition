@@ -354,188 +354,11 @@ async def delete_file(file_id: str):
     }
 
 
-# ============ AGENT TOOLS ============
-
-async def tool_search_documents(query: str, file_ids: List[str] = None, n_results: int = 5):
-    """Search for relevant content in documents."""
-    results = []
-
-    for file_id, file_data in files_db.items():
-        if file_ids and file_id not in file_ids:
-            continue
-
-        chunks = chunks_db.get(file_id, [])
-        for chunk in chunks:
-            if query.lower() in chunk["content"].lower():
-                results.append({
-                    "file_id": file_id,
-                    "file_name": file_data["name"],
-                    "chunk": chunk["content"],
-                    "page": chunk["page"]
-                })
-                if len(results) >= n_results:
-                    break
-        if len(results) >= n_results:
-            break
-
-    return results
-
-
-async def tool_update_block(file_id: str, block_id: str, new_content: str):
-    """Update a specific block in a document."""
-    if file_id not in files_db:
-        return {"error": "File not found"}
-
-    chunks = chunks_db.get(file_id, [])
-    for chunk in chunks:
-        if chunk["id"] == block_id:
-            old_content = chunk["content"]
-            chunk["content"] = new_content
-
-            # Reconstruct file content
-            all_content = "\n\n".join([c["content"] for c in chunks])
-
-            # Update file
-            files_db[file_id]["content"] = all_content
-            file_path = Path(files_db[file_id]["path"])
-            async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
-                await f.write(all_content)
-
-            # Add version
-            versions_db[file_id].append({
-                "version": len(versions_db[file_id]) + 1,
-                "timestamp": datetime.utcnow().isoformat(),
-                "author": "agent",
-                "summary": f"Updated block: {old_content[:50]}..."
-            })
-
-            return {"success": True, "block_id": block_id}
-
-    return {"error": "Block not found"}
-
-
-async def tool_insert_block(file_id: str, after_block_id: str, content: str):
-    """Insert a new block into a document."""
-    if file_id not in files_db:
-        return {"error": "File not found"}
-
-    chunks = chunks_db.get(file_id, [])
-
-    new_block = {
-        "id": str(uuid.uuid4()),
-        "file_id": file_id,
-        "page": 1,
-        "chunk_index": len(chunks),
-        "content": content,
-        "bbox": None
-    }
-
-    if after_block_id:
-        # Find position
-        for i, chunk in enumerate(chunks):
-            if chunk["id"] == after_block_id:
-                chunks.insert(i + 1, new_block)
-                break
-    else:
-        chunks.append(new_block)
-
-    # Reconstruct file content
-    all_content = "\n\n".join([c["content"] for c in chunks])
-
-    # Update file
-    files_db[file_id]["content"] = all_content
-    file_path = Path(files_db[file_id]["path"])
-    async with aiofiles.open(file_path, "w", encoding="utf-8") as f:
-        await f.write(all_content)
-
-    return {"success": True, "block_id": new_block["id"]}
-
-
-# Available tools for the agent
-AVAILABLE_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search_documents",
-            "description": "Search for relevant content in uploaded documents",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query"
-                    },
-                    "file_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Optional: list of file IDs to search in"
-                    },
-                    "n_results": {
-                        "type": "integer",
-                        "description": "Number of results to return"
-                    }
-                },
-                "required": ["query"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "update_block",
-            "description": "Update a specific block of text in a document",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_id": {
-                        "type": "string",
-                        "description": "The ID of the file to update"
-                    },
-                    "block_id": {
-                        "type": "string",
-                        "description": "The ID of the block/chunk to update"
-                    },
-                    "new_content": {
-                        "type": "string",
-                        "description": "The new content for the block"
-                    }
-                },
-                "required": ["file_id", "block_id", "new_content"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "insert_block",
-            "description": "Insert a new block of text into a document",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "file_id": {
-                        "type": "string",
-                        "description": "The ID of the file"
-                    },
-                    "after_block_id": {
-                        "type": "string",
-                        "description": "Insert after this block ID (empty to append)"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "The content to insert"
-                    }
-                },
-                "required": ["file_id", "content"]
-            }
-        }
-    }
-]
-
-TOOL_HANDLERS = {
-    "search_documents": tool_search_documents,
-    "update_block": tool_update_block,
-    "insert_block": tool_insert_block,
-}
+# ============ LEGACY TOOL RUNTIME ============
+# This legacy server entrypoint is retained for backward compatibility only.
+# Agent tools are disabled here and maintained in backend/main.py.
+LEGACY_TOOLING_ENABLED = False
+AVAILABLE_TOOLS: List[dict] = []
 
 
 # ============ CHAT ENDPOINTS ============
@@ -547,7 +370,7 @@ async def chat_completion(request: dict):
     message = request.get("message", "")
     context_files = request.get("context_files", [])
     model = request.get("model", "deepseek-chat")
-    use_tools = request.get("use_tools", True)
+    use_tools = request.get("use_tools", True) and LEGACY_TOOLING_ENABLED
 
     # Create session if needed
     if session_id not in sessions_db:
@@ -627,7 +450,7 @@ When responding:
                 "messages": messages
             }
 
-            if use_tools:
+            if use_tools and AVAILABLE_TOOLS:
                 kwargs["tools"] = AVAILABLE_TOOLS
                 kwargs["tool_choice"] = "auto"
 
@@ -636,38 +459,17 @@ When responding:
             assistant_message = response.choices[0].message
             response_content = assistant_message.content or ""
 
-            if assistant_message.tool_calls:
+            if use_tools and assistant_message.tool_calls:
                 for tool_call in assistant_message.tool_calls:
                     function_name = tool_call.function.name
                     function_args = json.loads(tool_call.function.arguments)
 
-                    # Execute tool
-                    if function_name in TOOL_HANDLERS:
-                        result = await TOOL_HANDLERS[function_name](**function_args)
-                        tool_calls.append({
-                            "id": tool_call.id,
-                            "name": function_name,
-                            "arguments": function_args,
-                            "result": result
-                        })
-
-                        # Get follow-up response
-                        messages.append({
-                            "role": "assistant",
-                            "content": response_content,
-                            "tool_calls": [tc.model_dump() for tc in assistant_message.tool_calls]
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(result)
-                        })
-
-                        followup = await llm_client.chat.completions.create(
-                            model=model,
-                            messages=messages
-                        )
-                        response_content = followup.choices[0].message.content or ""
+                    tool_calls.append({
+                        "id": tool_call.id,
+                        "name": function_name,
+                        "arguments": function_args,
+                        "result": {"error": "Legacy tool runtime is disabled. Use backend/main.py service."}
+                    })
 
         except Exception as e:
             response_content = f"Error calling LLM: {str(e)}"

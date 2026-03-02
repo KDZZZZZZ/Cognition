@@ -36,6 +36,7 @@ class FileType(str, enum.Enum):
     FOLDER = "folder"
     MD = "md"
     PDF = "pdf"
+    WEB = "web"
     CODE = "code"
     SESSION = "session"
     IMAGE = "image"
@@ -85,6 +86,81 @@ class DocumentChunk(Base):
     bbox: Mapped[Optional[tuple]] = mapped_column(JSON, nullable=True)  # x0, y0, x1, y1
     embedding_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DocumentPageAsset(Base):
+    __tablename__ = "document_page_assets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    file_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    image_path: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
+    image_url: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
+    text_anchor: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class DocumentSegment(Base):
+    __tablename__ = "document_segments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    file_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # md/pdf/web/...
+    page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    section: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    bbox: Mapped[Optional[tuple]] = mapped_column(JSON, nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    segment_type: Mapped[str] = mapped_column(String(32), nullable=False, default="paragraph")
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class DocumentAsset(Base):
+    __tablename__ = "document_assets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    file_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    page_or_section: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    asset_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)  # image/screenshot/...
+    path: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
+    url: Mapped[Optional[str]] = mapped_column(String(600), nullable=True)
+    meta: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class SegmentEmbedding(Base):
+    __tablename__ = "segment_embeddings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    segment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("document_segments.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    modality: Mapped[str] = mapped_column(String(16), nullable=False, index=True)  # text/image/fused
+    dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False, default="qwen3-vl-embedding")
+    vector_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class FileIndexStatus(Base):
+    __tablename__ = "file_index_status"
+
+    file_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("files.id", ondelete="CASCADE"), primary_key=True
+    )
+    parse_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    embedding_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
 
 
 class Version(Base):

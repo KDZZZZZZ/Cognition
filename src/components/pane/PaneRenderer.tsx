@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { X, Split, Download, GitCommit, GripVertical, Plus, MessageSquare, FileText } from 'lucide-react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { X, Split, Download, GitCommit, GripVertical, Plus, MessageSquare, FileText, Loader2 } from 'lucide-react';
 import { Pane } from '../../types';
 import { TiptapMarkdownEditor } from '../editor/TiptapMarkdownEditor';
 import { SessionView } from '../session/SessionView';
@@ -8,6 +8,7 @@ import { RenderedDiffViewer } from '../editor/RenderedDiffViewer';
 import { usePaneStore } from '../../stores/paneStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useFileStore } from '../../stores/apiStore';
+import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useVersionStore } from '../../stores/versionStore';
 import { useDiffStore } from '../../stores/diffStore';
@@ -31,6 +32,25 @@ interface TabDragData {
 }
 
 const TAB_DRAG_MIME_TYPE = 'application/x-tab-drag';
+let activeTabDragData: TabDragData | null = null;
+
+function readTabDragData(event: React.DragEvent): TabDragData | null {
+  const dragTypes = Array.from(event.dataTransfer.types || []);
+  const raw = event.dataTransfer.getData(TAB_DRAG_MIME_TYPE);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as TabDragData;
+    } catch (err) {
+      console.error('Failed to parse tab drag data:', err);
+      return null;
+    }
+  }
+
+  if (dragTypes.includes(TAB_DRAG_MIME_TYPE)) return null;
+  if (!activeTabDragData) return null;
+
+  return activeTabDragData;
+}
 
 export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLeave, onDrop }: PaneRendererProps) {
   const [isDragOver, setIsDragOver] = useState(false);
@@ -39,18 +59,22 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const [fileContent, setFileContent] = useState('');
   const [showNewTabMenu, setShowNewTabMenu] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [diffMode, setDiffMode] = useState<'split' | 'inline'>('split');
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingDiffEvent, setPendingDiffEvent] = useState<DiffEventDTO | null>(null);
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [pendingDiffLoading, setPendingDiffLoading] = useState(false);
+  const [pdfFileUrl, setPdfFileUrl] = useState<string | null>(null);
   const previousContentRef = useRef<string>('');
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSaveRef = useRef<{ fileId: string; fileName: string; content: string } | null>(null);
+  const pendingDiffRequestRef = useRef(0);
 
   const activeTab = pane.tabs.find((t) => t.id === pane.activeTabId);
-  const { getFileContent, updateFileContent, files } = useFileStore();
+  const { getFileContent, updateFileContent, files, loadFiles } = useFileStore();
+  const { createFile: createTreeFile } = useFileTreeStore();
   const { permissions: allPermissions, togglePermission, setPermission } = useSessionStore();
   const { setActiveTab, closeTab, reorderTabs, moveTabToPane, openTab, getAllOpenTabs, closePane, createPane, setTabMode } = usePaneStore();
-  const { sessionId, setSessionId } = useChatStore();
+  const { sessionId, setSessionId, sendMessageForSession, addSessionReference } = useChatStore();
   const { addVersion } = useVersionStore();
   const { activeDiff, clearDiff } = useDiffStore();
 
@@ -61,9 +85,12 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     : {};
 
   const loadPendingDiffForFile = useCallback(async (fileId: string) => {
+    const requestId = pendingDiffRequestRef.current + 1;
+    pendingDiffRequestRef.current = requestId;
     setPendingDiffLoading(true);
     try {
       const response = await api.getPendingDiffEvent(fileId);
+      if (pendingDiffRequestRef.current !== requestId) return;
       if (response.success && response.data?.event) {
         setPendingDiffEvent(response.data.event);
         const firstPending = response.data.event.lines.find((line) => line.decision === 'pending');
@@ -73,11 +100,14 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
         setSelectedLineId(null);
       }
     } catch (err) {
+      if (pendingDiffRequestRef.current !== requestId) return;
       console.error('Failed to load pending diff event:', err);
       setPendingDiffEvent(null);
       setSelectedLineId(null);
     } finally {
-      setPendingDiffLoading(false);
+      if (pendingDiffRequestRef.current === requestId) {
+        setPendingDiffLoading(false);
+      }
     }
   }, []);
 
@@ -114,10 +144,117 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       });
       loadPendingDiffForFile(activeTab.id);
     } else {
+      pendingDiffRequestRef.current += 1;
       setPendingDiffEvent(null);
       setSelectedLineId(null);
     }
-  }, [activeTab?.id, activeTab?.type, getFileContent, loadPendingDiffForFile]);
+  }, [activeTab, getFileContent, loadPendingDiffForFile]);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+      if (pendingSaveRef.current) {
+        const pending = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        if (pending.content !== previousContentRef.current) {
+          void updateFileContent(pending.fileId, pending.content).then((saved) => {
+            if (saved) previousContentRef.current = pending.content;
+          });
+        }
+      }
+    };
+  }, [activeTab?.id, updateFileContent]);
+
+  const scheduleMarkdownSave = useCallback(
+    (fileId: string, fileName: string, nextContent: string) => {
+      setFileContent(nextContent);
+
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+
+      if (nextContent === previousContentRef.current) {
+        pendingSaveRef.current = null;
+        return;
+      }
+
+      pendingSaveRef.current = { fileId, fileName, content: nextContent };
+
+      saveTimeoutRef.current = setTimeout(async () => {
+        const pending = pendingSaveRef.current;
+        if (!pending || pending.fileId !== fileId || pending.content !== nextContent) {
+          saveTimeoutRef.current = null;
+          return;
+        }
+
+        pendingSaveRef.current = null;
+        saveTimeoutRef.current = null;
+
+        const oldContent = previousContentRef.current;
+        const saved = await updateFileContent(fileId, nextContent);
+        if (!saved) return;
+
+        if (oldContent.trim() !== nextContent.trim() && Math.abs(oldContent.length - nextContent.length) > 10) {
+          addVersion(
+            fileId,
+            'human',
+            'edit',
+            `Edited ${fileName}`,
+            oldContent,
+            nextContent
+          );
+        }
+        previousContentRef.current = nextContent;
+      }, 320);
+    },
+    [addVersion, updateFileContent]
+  );
+
+  useEffect(() => {
+    if (!activeTab || activeTab.type !== 'pdf') {
+      setPdfFileUrl(null);
+      return;
+    }
+
+    const existing = files.find((file) => file.id === activeTab.id);
+    if (existing?.url) {
+      setPdfFileUrl(existing.url);
+      return;
+    }
+
+    let disposed = false;
+    setPdfFileUrl(null);
+
+    const resolvePdfUrl = async () => {
+      try {
+        await loadFiles();
+        const refreshed = useFileStore.getState().files.find((file) => file.id === activeTab.id);
+        if (refreshed?.url) {
+          if (!disposed) setPdfFileUrl(refreshed.url);
+          return;
+        }
+
+        const response = await api.getFile(activeTab.id);
+        if (response.success && response.data?.url && !disposed) {
+          setPdfFileUrl(response.data.url);
+        }
+      } catch (err) {
+        if (!disposed) {
+          console.error('Failed to resolve PDF source:', err);
+        }
+      }
+    };
+
+    void resolvePdfUrl();
+
+    return () => {
+      disposed = true;
+    };
+  }, [activeTab, files, loadFiles]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -189,10 +326,11 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const handleStartChat = async () => {
     setShowNewTabMenu(false);
 
-    const newId = `chat-${Date.now()}`;
+    const sessionLabel = `New Session ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const newId = (await createTreeFile(sessionLabel, 'session')) || `chat-${Date.now()}`;
     const newTab = {
       id: newId,
-      name: 'New Chat',
+      name: sessionLabel,
       type: 'session' as const,
       mode: 'editor' as ViewMode,
     };
@@ -217,7 +355,9 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       fromIndex: index,
     };
     e.dataTransfer.setData(TAB_DRAG_MIME_TYPE, JSON.stringify(dragData));
+    e.dataTransfer.setData('text/plain', tabId);
     e.dataTransfer.effectAllowed = 'move';
+    activeTabDragData = dragData;
     setDraggedTabInfo({ sourcePaneId: pane.id, tabId });
   }, [pane.id]);
 
@@ -225,9 +365,8 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
 
-    // Check if this is a tab drag operation
-    const tabDragData = e.dataTransfer.getData(TAB_DRAG_MIME_TYPE);
-    if (tabDragData) {
+    const dragTypes = Array.from(e.dataTransfer.types || []);
+    if (dragTypes.includes(TAB_DRAG_MIME_TYPE) || activeTabDragData) {
       setDropTargetIndex(index);
     }
   }, []);
@@ -240,36 +379,33 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     e.preventDefault();
     e.stopPropagation();
 
-    const tabDragDataStr = e.dataTransfer.getData(TAB_DRAG_MIME_TYPE);
-    if (!tabDragDataStr) return;
-
-    try {
-      const dragData: TabDragData = JSON.parse(tabDragDataStr);
-
-      if (dragData.sourcePaneId === pane.id) {
-        // Same pane: reorder
-        if (dragData.fromIndex !== targetIndex) {
-          reorderTabs(pane.id, dragData.fromIndex, targetIndex);
-        }
-      } else {
-        // Different pane: move tab to this pane
-        moveTabToPane(dragData.sourcePaneId, pane.id, dragData.tabId, targetIndex);
-      }
-    } catch (err) {
-      console.error('Failed to parse tab drag data:', err);
+    const dragData = readTabDragData(e);
+    if (!dragData) {
+      setDropTargetIndex(null);
+      return;
     }
 
+    if (dragData.sourcePaneId === pane.id) {
+      if (dragData.fromIndex !== targetIndex) {
+        reorderTabs(pane.id, dragData.fromIndex, targetIndex);
+      }
+    } else {
+      moveTabToPane(dragData.sourcePaneId, pane.id, dragData.tabId, targetIndex);
+    }
+
+    activeTabDragData = null;
     setDropTargetIndex(null);
   }, [pane.id, reorderTabs, moveTabToPane]);
 
   const handleTabDragEnd = useCallback(() => {
+    activeTabDragData = null;
     setDraggedTabInfo(null);
     setDropTargetIndex(null);
   }, []);
 
   const handlePaneDrop = useCallback((e: React.DragEvent) => {
-    const tabDragDataStr = e.dataTransfer.getData(TAB_DRAG_MIME_TYPE);
-    if (!tabDragDataStr) {
+    const dragData = readTabDragData(e);
+    if (!dragData) {
       // Not a tab drag, let the parent handle it (file drag)
       setIsDragOver(false);
       onDrop(e);
@@ -281,22 +417,19 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     e.preventDefault();
     e.stopPropagation();
 
-    try {
-      const dragData: TabDragData = JSON.parse(tabDragDataStr);
-      if (dragData.sourcePaneId !== pane.id) {
-        moveTabToPane(dragData.sourcePaneId, pane.id, dragData.tabId);
-      }
-    } catch (err) {
-      console.error('Failed to parse tab drag data:', err);
+    if (dragData.sourcePaneId !== pane.id) {
+      moveTabToPane(dragData.sourcePaneId, pane.id, dragData.tabId);
     }
 
+    activeTabDragData = null;
     setIsDragOver(false);
   }, [pane.id, moveTabToPane, onDrop]);
 
-  const applyLineDecision = useCallback(async (decision: 'accepted' | 'rejected') => {
+  const applyLineDecision = useCallback(async (decision: 'accepted' | 'rejected', lineId?: string) => {
     if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
 
     const targetLine =
+      pendingDiffEvent.lines.find((line) => line.id === lineId) ||
       pendingDiffEvent.lines.find((line) => line.id === selectedLineId) ||
       pendingDiffEvent.lines.find((line) => line.decision === 'pending');
 
@@ -316,6 +449,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     });
 
     if (response.success) {
+      pendingDiffRequestRef.current += 1;
       const finalContent = response.data?.final_content || (acceptAll ? pendingDiffEvent.new_content : pendingDiffEvent.old_content);
       setFileContent(finalContent);
       previousContentRef.current = finalContent;
@@ -326,6 +460,15 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       useFileStore.getState().getFileVersions(activeTab.id);
     }
   }, [activeTab, pendingDiffEvent]);
+
+  const pendingLines = useMemo(
+    () => pendingDiffEvent?.lines.filter((line) => line.decision === 'pending') || [],
+    [pendingDiffEvent]
+  );
+
+  const openSessions = getAllOpenTabs()
+    .filter((tab) => tab.type === 'session')
+    .map((tab) => ({ id: tab.id, name: tab.name }));
 
   return (
     <div
@@ -355,8 +498,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
         </div>
       )}
       <div
-        className="flex items-center h-9 border-b border-theme-border/30 paper-divider-dashed select-none"
-        style={{ backgroundColor: 'var(--theme-surface)' }}
+        className="flex items-center h-9 border-b border-theme-border/30 paper-divider-dashed select-none surface-panel"
       >
         <div className="flex-1 flex overflow-x-auto">
           {pane.tabs.map((tab, index) => {
@@ -367,7 +509,10 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
               <div
                 key={tab.id}
                 draggable
+                data-tab-id={tab.id}
+                data-tab-name={tab.name}
                 onDragStart={(e) => handleTabDragStart(e, tab.id, index)}
+                onDragEnter={(e) => handleTabDragOver(e, index)}
                 onDragOver={(e) => handleTabDragOver(e, index)}
                 onDragLeave={handleTabDragLeave}
                 onDrop={(e) => handleTabDrop(e, index)}
@@ -379,12 +524,13 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 }}
                 className={`group relative flex items-center gap-2 px-2 min-w-[100px] max-w-[160px] text-xs cursor-pointer border-r border-theme-border/25 paper-divider-dashed h-full transition-colors ${
                   pane.activeTabId === tab.id
-                    ? 'bg-theme-bg text-theme-text border-t-2 border-t-theme-border/80 font-medium'
+                    ? 'bg-theme-bg text-theme-text border-t-2 border-t-theme-border/80 font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]'
                     : 'bg-theme-bg/35 text-theme-text/60 hover:bg-theme-text/8'
                 } ${isDropTarget ? 'ring-1 ring-inset ring-theme-border/50' : ''} ${
                   isBeingDragged ? 'opacity-40' : ''
                 }`}
               >
+                {isDropTarget && <div className="absolute left-0 top-1 bottom-1 w-[3px] rounded-full bg-theme-accent" />}
                 <GripVertical size={12} className="paper-grip cursor-grab active:cursor-grabbing flex-shrink-0" />
                 <FileIcon type={tab.type} />
                 <span className="truncate flex-1">{tab.name}</span>
@@ -432,8 +578,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 onClick={() => setShowNewTabMenu(false)}
               />
               <div
-                className="absolute right-0 top-full mt-1 z-50 border border-theme-border/30 paper-divider rounded-lg shadow-lg py-1 min-w-[140px]"
-                style={{ backgroundColor: 'var(--theme-surface)' }}
+                className="absolute right-0 top-full mt-1 z-50 border border-theme-border/30 paper-divider rounded-lg shadow-lg py-1 min-w-[140px] surface-panel"
               >
                 <button
                   onClick={handleCreateNewMarkdown}
@@ -478,7 +623,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             sessionId={activeTab.id}
             allFiles={getAllOpenTabs()}
             permissions={sessionPerms}
-            onTogglePermission={(fileId) => togglePermission(activeTab.id, fileId)}
+            onTogglePermission={(fileId, fileType) => togglePermission(activeTab.id, fileId, fileType)}
           />
         ) : activeTab.mode === 'diff' ? (
           <div className="flex flex-col h-full bg-theme-bg">
@@ -492,21 +637,6 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
               </span>
 
               <div className="flex items-center gap-2">
-                <div className="flex bg-theme-bg/50 rounded p-0.5 border border-theme-border/25 paper-divider">
-                  <button
-                    onClick={() => setDiffMode('split')}
-                    className={`px-2 py-0.5 rounded transition-colors ${diffMode === 'split' ? 'bg-theme-bg shadow-sm text-theme-text' : 'text-theme-text/60 hover:bg-theme-text/10'}`}
-                  >
-                    Split
-                  </button>
-                  <button
-                    onClick={() => setDiffMode('inline')}
-                    className={`px-2 py-0.5 rounded transition-colors ${diffMode === 'inline' ? 'bg-theme-bg shadow-sm text-theme-text' : 'text-theme-text/60 hover:bg-theme-text/10'}`}
-                  >
-                    Inline
-                  </button>
-                </div>
-
                 <button
                   onClick={() => {
                     clearDiff();
@@ -524,7 +654,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                   <RenderedDiffViewer
                     oldContent={activeDiff.oldContent}
                     newContent={activeDiff.newContent}
-                    mode={diffMode}
+                    mode="split"
                   />
                   {/* Floating Action Buttons */}
                   <div className="absolute bottom-6 right-6 flex gap-2 shadow-lg rounded-lg overflow-hidden z-10">
@@ -559,55 +689,42 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
           </div>
         ) : activeTab.type === 'pdf' ? (
           <div
-            className="w-full h-full flex flex-col"
+            className="w-full h-full min-h-0 flex flex-col"
             style={{ backgroundColor: 'var(--theme-surface-muted)' }}
           >
-            {(() => {
-              const file = files.find((f) => f.id === activeTab.id);
-              if (!file || !file.url) {
-                return (
-                  <div className="flex flex-col items-center justify-center h-full text-theme-text/40">
-                    <p>PDF source not available</p>
-                    <p className="text-xs mt-2">Try refreshing the file list</p>
-                  </div>
-                );
-              }
-              const fullUrl = file.url.startsWith('http') ? file.url : `${BASE_URL}${file.url}`;
-              return (
-                <PDFViewer
-                  fileId={activeTab.id}
-                  filePath={fullUrl}
-                  onPageChange={(page) => {
-                    setCurrentPage(page);
-                    handleViewportChange(0, 1000, page);
-                  }}
-                  onScrollChange={handleViewportChange}
-                />
-              );
-            })()}
+            {!pdfFileUrl ? (
+              <div className="flex flex-col items-center justify-center h-full text-theme-text/45">
+                <Loader2 size={18} className="animate-spin" />
+                <p className="text-xs mt-2">Loading PDF source...</p>
+              </div>
+            ) : (
+              <PDFViewer
+                fileId={activeTab.id}
+                filePath={pdfFileUrl.startsWith('http') ? pdfFileUrl : `${BASE_URL}${pdfFileUrl}`}
+                onPageChange={(page) => {
+                  setCurrentPage(page);
+                  handleViewportChange(0, 1000, page);
+                }}
+                onScrollChange={handleViewportChange}
+              />
+            )}
           </div>
         ) : activeTab.type === 'md' ? (
           pendingDiffEvent ? (
             <div className="flex flex-col h-full bg-theme-bg">
-              <div className="bg-amber-50/50 px-3 py-2 border-b border-theme-border/20 text-theme-text flex justify-between items-center text-xs">
-                <span className="flex items-center gap-2">
-                  <GitCommit size={14} />
-                  <strong>{pendingDiffEvent.summary || 'Pending Agent Diff'}</strong>
-                  {pendingDiffLoading && <span className="text-theme-text/50">Refreshing...</span>}
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => applyLineDecision('accepted')}
-                    className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
-                  >
-                    Accept
-                  </button>
-                  <button
-                    onClick={() => applyLineDecision('rejected')}
-                    className="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700"
-                  >
-                    Reject
-                  </button>
+              <div className="surface-panel bg-amber-50/70 px-3 py-2 border-b border-theme-border/20 text-theme-text text-xs">
+                <div className="flex justify-between items-center gap-3 flex-wrap">
+                  <span className="flex items-center gap-2">
+                    <GitCommit size={14} />
+                    <strong>{pendingDiffEvent.summary || 'Pending Agent Diff'}</strong>
+                    <span className="text-theme-text/55">
+                      {pendingLines.length} pending line{pendingLines.length === 1 ? '' : 's'}
+                    </span>
+                    {pendingDiffLoading && <span className="text-theme-text/50">Refreshing...</span>}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 mt-2">
                   <button
                     onClick={() => finalizePendingDiff(true)}
                     className="px-3 py-1 bg-green-700 text-white rounded hover:bg-green-800"
@@ -622,43 +739,54 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                   </button>
                 </div>
               </div>
-              <div
-                className="flex-1 overflow-hidden"
-                onClick={() => {
-                  if (!selectedLineId) {
-                    const firstPending = pendingDiffEvent.lines.find((line) => line.decision === 'pending');
-                    if (firstPending) setSelectedLineId(firstPending.id);
-                  }
-                }}
-              >
+              <div className="flex-1 overflow-hidden relative">
                 <RenderedDiffViewer
                   oldContent={pendingDiffEvent.old_content}
                   newContent={pendingDiffEvent.new_content}
                   mode="inline"
+                  pendingLines={pendingLines}
+                  selectedLineId={selectedLineId}
+                  onSelectLine={setSelectedLineId}
+                  onApplyLineDecision={(lineId, decision) => {
+                    void applyLineDecision(decision, lineId);
+                  }}
                 />
               </div>
             </div>
           ) : (
             <TiptapMarkdownEditor
+              key={activeTab.id}
               content={fileContent}
-              onChange={async (val) => {
-                if (activeTab) {
-                  const oldContent = previousContentRef.current;
-                  await updateFileContent(activeTab.id, val);
-                  setFileContent(val);
+              onChange={(val) => {
+                if (!activeTab || activeTab.type !== 'md') return;
+                scheduleMarkdownSave(activeTab.id, activeTab.name, val);
+              }}
+              availableSessions={openSessions}
+              defaultSessionId={sessionId || openSessions[0]?.id}
+              sourceFile={
+                activeTab && activeTab.type === 'md'
+                  ? {
+                      id: activeTab.id,
+                      name: activeTab.name,
+                    }
+                  : undefined
+              }
+              onAddReferenceToSession={(targetSessionId, reference) => {
+                addSessionReference(targetSessionId, reference);
+              }}
+              onRunSelectionAction={async ({ action, targetSessionId, markdown }) => {
+                if (!activeTab || activeTab.type !== 'md') return;
+                const prompt =
+                  action === 'fix'
+                    ? `请修正以下选中内容，并给出修正后的 Markdown：\n\n${markdown}`
+                    : `请检查以下选中内容的问题（语法、表达、事实）并给出建议：\n\n${markdown}`;
 
-                  if (oldContent.trim() !== val.trim() && Math.abs(oldContent.length - val.length) > 10) {
-                    addVersion(
-                      activeTab.id,
-                      'human',
-                      'edit',
-                      `Edited ${activeTab.name}`,
-                      oldContent,
-                      val
-                    );
-                    previousContentRef.current = val;
-                  }
-                }
+                await sendMessageForSession(
+                  targetSessionId,
+                  prompt,
+                  [activeTab.id],
+                  { activeFileId: activeTab.id, compactMode: 'force' }
+                );
               }}
             />
           )

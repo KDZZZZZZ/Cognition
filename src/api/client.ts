@@ -2,7 +2,10 @@
  * API Client for Knowledge IDE Backend
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+import { runtimeConfig } from '../config/runtime';
+
+const API_BASE = runtimeConfig.apiBaseUrl;
+const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'kimi-latest';
 
 export const BASE_URL = API_BASE;
 
@@ -44,7 +47,23 @@ export interface ChatMessage {
   citations?: any[];
 }
 
-export type TaskStatus = 'running' | 'completed' | 'failed' | 'cancelled' | 'cancelling';
+export type TaskStatus = 'running' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'cancelling';
+
+export interface TaskPromptOption {
+  id: string;
+  label: string;
+  description?: string | null;
+  recommended?: boolean;
+}
+
+export interface TaskPromptPayload {
+  prompt_id: string;
+  question: string;
+  options: TaskPromptOption[];
+  recommended_option_id?: string;
+  allow_other?: boolean;
+  other_placeholder?: string;
+}
 
 export interface TaskEventPayload {
   event_id: string;
@@ -57,6 +76,14 @@ export interface TaskEventPayload {
   status: TaskStatus;
   timestamp: string;
   payload?: Record<string, any>;
+}
+
+export interface SessionSummary {
+  id: string;
+  name: string;
+  permissions: Record<string, 'read' | 'write' | 'none'>;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ChatCompletionOptions {
@@ -110,9 +137,46 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
+  private normalizeApiResponse<T>(payload: unknown, ok: boolean, response: Pick<Response, 'status' | 'statusText'>): ApiResponse<T> {
+    if (payload && typeof payload === 'object' && 'success' in payload) {
+      return payload as ApiResponse<T>;
+    }
+
+    if (!ok) {
+      const fallback = typeof payload === 'string' ? payload : response.statusText || `Request failed (${response.status})`;
+      return { success: false, error: fallback };
+    }
+
+    return { success: true, data: payload as T };
+  }
+
+  private async parseResponse<T>(response: Response): Promise<ApiResponse<T>> {
+    const ok = response.ok ?? true;
+
+    if (typeof response.json === 'function') {
+      try {
+        const payload = await response.json();
+        return this.normalizeApiResponse<T>(payload, ok, response);
+      } catch {
+        // Fall through to text parsing for plain-text errors and empty responses.
+      }
+    }
+
+    const text = typeof response.text === 'function' ? await response.text() : '';
+    if (!ok) {
+      return {
+        success: false,
+        error: text || response.statusText || `Request failed (${response.status})`,
+      };
+    }
+    return text
+      ? { success: true, data: text as T }
+      : { success: false, error: 'Empty response body' };
+  }
+
   async get(endpoint: string): Promise<ApiResponse> {
     const response = await fetch(`${this.baseUrl}${endpoint}`);
-    return response.json();
+    return this.parseResponse(response);
   }
 
   async post(endpoint: string, body?: any, init?: RequestInit): Promise<ApiResponse> {
@@ -122,7 +186,7 @@ class ApiClient {
       body: body instanceof FormData ? body : JSON.stringify(body),
       signal: init?.signal,
     });
-    return response.json();
+    return this.parseResponse(response);
   }
 
   async put(endpoint: string, body: any): Promise<ApiResponse> {
@@ -131,7 +195,7 @@ class ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return response.json();
+    return this.parseResponse(response);
   }
 
   async patch(endpoint: string, body: any): Promise<ApiResponse> {
@@ -140,12 +204,12 @@ class ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return response.json();
+    return this.parseResponse(response);
   }
 
   async delete(endpoint: string): Promise<ApiResponse> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, { method: 'DELETE' });
-    return response.json();
+    return this.parseResponse(response);
   }
 
   // Health
@@ -223,6 +287,44 @@ class ApiClient {
     return this.get(`/api/v1/files/${fileId}/chunks${query}`);
   }
 
+  async importWebUrl(payload: {
+    url: string;
+    title?: string;
+    tags?: string[];
+    fetch_options?: Record<string, any>;
+    parent_id?: string | null;
+  }): Promise<ApiResponse> {
+    return this.post('/api/v1/files/import/web-url', payload);
+  }
+
+  async getFileSegments(
+    fileId: string,
+    options?: {
+      page?: number;
+      section?: string;
+      bbox?: [number, number, number, number];
+      segmentType?: string;
+      source?: string;
+    }
+  ): Promise<ApiResponse<{ file_id: string; count: number; segments: any[] }>> {
+    const params = new URLSearchParams();
+    if (typeof options?.page === 'number') params.set('page', String(options.page));
+    if (options?.section) params.set('section', options.section);
+    if (options?.bbox && options.bbox.length === 4) params.set('bbox', options.bbox.join(','));
+    if (options?.segmentType) params.set('segment_type', options.segmentType);
+    if (options?.source) params.set('source', options.source);
+    const query = params.toString();
+    return this.get(`/api/v1/files/${fileId}/segments${query ? `?${query}` : ''}`);
+  }
+
+  async reindexFile(fileId: string, mode: 'parse_only' | 'embed_only' | 'all' = 'all'): Promise<ApiResponse> {
+    return this.post(`/api/v1/files/${fileId}/reindex`, { mode });
+  }
+
+  async getFileIndexStatus(fileId: string): Promise<ApiResponse> {
+    return this.get(`/api/v1/files/${fileId}/index-status`);
+  }
+
   async getFileVersions(fileId: string): Promise<ApiResponse<{ versions: FileVersion[]; total: number }>> {
     return this.get(`/api/v1/files/${fileId}/versions`);
   }
@@ -269,7 +371,7 @@ class ApiClient {
     sessionId: string,
     message: string,
     contextFiles: string[] = [],
-    model = 'qwen-plus',
+    model = DEFAULT_CHAT_MODEL,
     useTools = true,
     options?: ChatCompletionOptions
   ): Promise<ApiResponse> {
@@ -298,8 +400,43 @@ class ApiClient {
     return this.post(`/api/v1/chat/tasks/${encodeURIComponent(taskId)}/cancel${query}`);
   }
 
+  async answerTaskPrompt(
+    sessionId: string,
+    taskId: string,
+    payload: {
+      promptId: string;
+      selectedOptionId?: string;
+      otherText?: string;
+    }
+  ): Promise<ApiResponse> {
+    return this.post(`/api/v1/chat/tasks/${encodeURIComponent(taskId)}/answer`, {
+      session_id: sessionId,
+      prompt_id: payload.promptId,
+      selected_option_id: payload.selectedOptionId,
+      other_text: payload.otherText,
+    });
+  }
+
   async getSession(sessionId: string): Promise<ApiResponse> {
     return this.get(`/api/v1/chat/sessions/${sessionId}`);
+  }
+
+  async listSessions(limit = 200): Promise<ApiResponse<{ sessions: SessionSummary[]; count: number }>> {
+    return this.get(`/api/v1/chat/sessions?limit=${limit}`);
+  }
+
+  async createSession(
+    name: string,
+    options?: {
+      id?: string;
+      permissions?: Record<string, 'read' | 'write' | 'none'>;
+    }
+  ): Promise<ApiResponse<SessionSummary>> {
+    return this.post('/api/v1/chat/sessions', {
+      id: options?.id,
+      name,
+      permissions: options?.permissions || {},
+    });
   }
 
   async getSessionMessages(sessionId: string, limit = 50): Promise<ApiResponse<{ messages: ChatMessage[] }>> {

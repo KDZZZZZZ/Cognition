@@ -4,11 +4,8 @@ import { usePaneStore } from '../../stores/paneStore';
 import { useFileStore } from '../../stores/apiStore';
 import { FileNode, ViewMode } from '../../types';
 import {
-  FileText,
-  MessageSquare,
-  Folder,
   RefreshCw,
-  Upload,
+  Plus,
   ChevronRight,
   ChevronDown,
 } from 'lucide-react';
@@ -31,6 +28,22 @@ interface ContextMenuState {
   y: number;
   file: FileNode | null;
 }
+
+interface QuickActionMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  parentId?: string;
+}
+
+interface UploadProgressState {
+  total: number;
+  completed: number;
+}
+
+const QUICK_ACTION_MENU_WIDTH = 190;
+const QUICK_ACTION_MENU_HEIGHT = 240;
+const QUICK_ACTION_MENU_MARGIN = 8;
 
 export function FileTree() {
   const {
@@ -66,16 +79,85 @@ export function FileTree() {
     y: 0,
     file: null,
   });
+  const [quickActionMenu, setQuickActionMenu] = useState<QuickActionMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    parentId: undefined,
+  });
+  const [pathFocusId, setPathFocusId] = useState<string | undefined>(undefined);
+  const [pendingUploadParentId, setPendingUploadParentId] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
 
   const treeRef = useRef<HTMLDivElement>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const activeFileId = panes.find((p) => p.id === activePaneId)?.activeTabId || null;
 
   useEffect(() => {
     loadFilesFromBackend();
-  }, []);
+  }, [loadFilesFromBackend]);
+
+  useEffect(() => {
+    if (!quickActionMenu.visible) return;
+
+    const handleClick = () => {
+      setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+    };
+
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, [quickActionMenu.visible]);
 
   const handleToggleFolder = (id: string) => {
     toggleFolder(id);
+  };
+
+  const findPathForNode = useCallback((targetId?: string): string[] => {
+    if (!targetId) return ['root'];
+    const walk = (nodes: FileNode[], path: string[]): string[] | null => {
+      for (const node of nodes) {
+        const nextPath = [...path, node.name];
+        if (node.id === targetId) {
+          return nextPath;
+        }
+        if (node.children?.length) {
+          const found = walk(node.children, nextPath);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    const found = walk(fileTree, ['root']);
+    return found || ['root'];
+  }, [fileTree]);
+
+  const openQuickActionMenu = (e: React.MouseEvent, parentId?: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setPathFocusId(parentId);
+
+    const treeRect = treeRef.current?.getBoundingClientRect();
+    const preferredLeft = treeRect ? treeRect.left + 10 : QUICK_ACTION_MENU_MARGIN;
+    const maxLeft = Math.max(
+      QUICK_ACTION_MENU_MARGIN,
+      window.innerWidth - QUICK_ACTION_MENU_WIDTH - QUICK_ACTION_MENU_MARGIN
+    );
+    const left = Math.min(Math.max(preferredLeft, QUICK_ACTION_MENU_MARGIN), maxLeft);
+
+    const preferredTop = e.clientY - 8;
+    const maxTop = Math.max(
+      QUICK_ACTION_MENU_MARGIN,
+      window.innerHeight - QUICK_ACTION_MENU_HEIGHT - QUICK_ACTION_MENU_MARGIN
+    );
+    const top = Math.min(Math.max(preferredTop, QUICK_ACTION_MENU_MARGIN), maxTop);
+
+    setQuickActionMenu({
+      visible: true,
+      x: left,
+      y: top,
+      parentId,
+    });
   };
 
   const handleOpenFile = (file: FileNode) => {
@@ -213,6 +295,7 @@ export function FileTree() {
   const handleContextMenu = (e: React.MouseEvent, file: FileNode | null) => {
     e.preventDefault();
     e.stopPropagation();
+    setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
     setContextMenu({
       visible: true,
       x: e.clientX,
@@ -244,12 +327,21 @@ export function FileTree() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
+    const parentId = pendingUploadParentId;
+    const selectedFiles = Array.from(files);
 
-    for (const file of Array.from(files)) {
-      await apiUploadFile(file);
+    setUploadProgress({ total: selectedFiles.length, completed: 0 });
+    try {
+      for (const [index, file] of selectedFiles.entries()) {
+        await apiUploadFile(file, parentId || null);
+        setUploadProgress({ total: selectedFiles.length, completed: index + 1 });
+      }
+      await loadFilesFromBackend();
+    } finally {
+      setUploadProgress(null);
+      setPendingUploadParentId(null);
+      e.target.value = '';
     }
-    await loadFilesFromBackend();
-    e.target.value = '';
   };
 
   const openNewDialog = (type: DialogType, parentId?: string, file?: FileNode) => {
@@ -262,6 +354,11 @@ export function FileTree() {
     setDialogType(null);
     setSelectedParentId(undefined);
     setSelectedFile(null);
+  };
+
+  const triggerUploadForParent = (parentId?: string) => {
+    setPendingUploadParentId(parentId || null);
+    uploadInputRef.current?.click();
   };
 
   const handleCreate = async (name: string) => {
@@ -363,7 +460,7 @@ export function FileTree() {
           className={`group flex items-center gap-1 py-1 cursor-pointer text-sm hover:bg-theme-text/10 select-none relative transition-colors ${
             activeFileId === item.id ? 'bg-theme-text/20 text-theme-text font-medium' : 'text-theme-text/80'
           } ${dropIndicatorClass}`}
-          style={{ paddingLeft: `${depth * 16 + 8}px`, paddingRight: '8px' }}
+          style={{ paddingLeft: `${depth * 16 + 8}px`, paddingRight: '8px', borderRadius: '8px' }}
           onClick={() =>
             item.type === 'folder' ? handleToggleFolder(item.id) : handleOpenFile(item)
           }
@@ -374,6 +471,11 @@ export function FileTree() {
           onDragLeave={handleDragLeave}
           onDrop={(e) => handleDrop(e, item)}
           onDragEnd={handleDragEnd}
+          onMouseEnter={() => {
+            if (item.type === 'folder') {
+              setPathFocusId(item.id);
+            }
+          }}
         >
           {/* Expand/Collapse icon for folders */}
           <span className="w-4 flex-shrink-0 text-theme-text/40">
@@ -391,6 +493,16 @@ export function FileTree() {
 
           {/* File name */}
           <span className="truncate flex-1">{item.name}</span>
+
+          {item.type === 'folder' && (
+            <button
+              className="opacity-0 group-hover:opacity-100 p-1 rounded-md hover:bg-theme-text/15 transition-all"
+              title="Add to this folder"
+              onClick={(e) => openQuickActionMenu(e, item.id)}
+            >
+              <Plus size={12} />
+            </button>
+          )}
         </div>
 
         {/* Children */}
@@ -407,7 +519,7 @@ export function FileTree() {
     <>
       <div
         ref={treeRef}
-        className="flex-1 overflow-y-auto py-2"
+        className="flex-1 overflow-y-auto py-2 relative"
         onContextMenu={(e) => {
           // Context menu on empty area
           if (e.target === treeRef.current) {
@@ -415,56 +527,45 @@ export function FileTree() {
           }
         }}
       >
+        {/* Fixed Root Path Bar */}
+        <div className="sticky top-0 z-20 px-2 pb-2 bg-theme-surface-muted/95 backdrop-blur-sm">
+          <div className="flex items-center justify-between rounded-[18px] border border-theme-border/25 bg-theme-bg px-3 py-2 shadow-[0_2px_8px_rgba(0,0,0,0.06)]">
+            <div className="text-[11px] text-theme-text/65 truncate">
+              {findPathForNode(pathFocusId || selectedParentId).join(' / ')}
+            </div>
+            <button
+              className="p-1.5 rounded-full border border-theme-border/25 hover:bg-theme-text/10 transition-colors"
+              title="Add at current path"
+              onClick={(e) => openQuickActionMenu(e, pathFocusId || selectedParentId)}
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+        </div>
+
         {/* Header */}
         <div className="px-4 py-2 text-xs font-semibold tracking-[0.08em] text-theme-text/45 uppercase flex items-center justify-between">
           <span>Explorer</span>
           <button
             onClick={handleRefresh}
-            className={`p-1 hover:bg-theme-text/10 rounded transition-colors ${refreshing ? 'animate-spin' : ''}`}
+            className={`p-1.5 hover:bg-theme-text/10 rounded-md transition-colors pill-button ${refreshing ? 'animate-spin' : ''}`}
             title="Refresh"
           >
             <RefreshCw size={12} />
           </button>
         </div>
 
-        {/* Quick Actions */}
-        <div className="px-2 pb-2 flex items-center gap-1 border-b border-theme-border/20 paper-divider-dashed">
-          <button
-            onClick={() => openNewDialog('md')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors"
-            title="New File (supports path: folder/file.md)"
-          >
-            <FileText size={12} />
-            <span>File</span>
-          </button>
-          <button
-            onClick={() => openNewDialog('session')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors"
-            title="New Session"
-          >
-            <MessageSquare size={12} />
-            <span>Session</span>
-          </button>
-          <button
-            onClick={() => openNewDialog('folder')}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors"
-            title="New Folder (supports path: folder1/folder2)"
-          >
-            <Folder size={12} />
-            <span>Folder</span>
-          </button>
-          <label className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-theme-text/70 hover:bg-theme-text/10 rounded-md transition-colors cursor-pointer">
-            <Upload size={12} />
-            <span>Upload</span>
-            <input
-              type="file"
-              className="hidden"
-              accept=".md,.txt,.pdf"
-              multiple
-              onChange={handleFileUpload}
-            />
-          </label>
-        </div>
+        {uploadProgress && (
+          <div className="mx-4 mb-2 rounded-lg border border-blue-500/18 bg-blue-50/55 px-3 py-2 text-[11px] text-blue-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.42)]">
+            <div className="font-medium">
+              Uploading and indexing {uploadProgress.total} file{uploadProgress.total > 1 ? 's' : ''}.
+            </div>
+            <div className="mt-1 text-blue-900/80">
+              Files appear after embeddings are ready and persisted.
+              {uploadProgress.completed > 0 ? ` ${uploadProgress.completed}/${uploadProgress.total} finished.` : ''}
+            </div>
+          </div>
+        )}
 
         {/* File Tree */}
         {loading ? (
@@ -483,6 +584,65 @@ export function FileTree() {
           </div>
         )}
       </div>
+
+      {/* Targeted Upload Input */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        className="hidden"
+        accept=".md,.txt,.pdf"
+        multiple
+        onChange={handleFileUpload}
+      />
+
+      {/* Folder/Root Quick Action Menu */}
+      {quickActionMenu.visible && (
+        <div
+          className="fixed z-[60] min-w-[190px] rounded-lg border border-theme-border/25 bg-theme-bg shadow-[0_12px_28px_rgba(0,0,0,0.16)] py-1"
+          style={{
+            left: quickActionMenu.x,
+            top: quickActionMenu.y,
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+            onClick={() => {
+              openNewDialog('md', quickActionMenu.parentId);
+              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+            }}
+          >
+            New File
+          </button>
+          <button
+            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+            onClick={() => {
+              openNewDialog('session', quickActionMenu.parentId);
+              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+            }}
+          >
+            New Session
+          </button>
+          <button
+            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+            onClick={() => {
+              openNewDialog('folder', quickActionMenu.parentId);
+              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+            }}
+          >
+            New Folder
+          </button>
+          <button
+            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+            onClick={() => {
+              triggerUploadForParent(quickActionMenu.parentId);
+              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+            }}
+          >
+            Upload File
+          </button>
+        </div>
+      )}
 
       {/* Context Menu */}
       {contextMenu.visible && (

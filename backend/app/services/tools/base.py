@@ -19,6 +19,7 @@ class FileType(str, Enum):
     """Supported file types."""
     MD = "md"
     PDF = "pdf"
+    WEB = "web"
     DOCX = "docx"
     TXT = "txt"
 

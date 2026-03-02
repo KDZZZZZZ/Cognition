@@ -8,6 +8,7 @@ class FileType(str, Enum):
     FOLDER = "folder"
     MD = "md"
     PDF = "pdf"
+    WEB = "web"
     CODE = "code"
     SESSION = "session"
     IMAGE = "image"
@@ -96,6 +97,19 @@ class ChatRequest(BaseModel):
     permissions: Optional[dict[str, str]] = None  # Initial permissions for new sessions
 
 
+class TaskAnswerRequest(BaseModel):
+    session_id: str
+    prompt_id: str
+    selected_option_id: Optional[str] = None
+    other_text: Optional[str] = None
+
+
+class SessionCreateRequest(BaseModel):
+    id: Optional[str] = None
+    name: str = "New Session"
+    permissions: Dict[str, str] = Field(default_factory=dict)
+
+
 class PermissionUpdate(BaseModel):
     session_id: str
     file_id: str
@@ -119,6 +133,18 @@ class FileUpdate(BaseModel):
 
 class MoveFileRequest(BaseModel):
     new_parent_id: Optional[str] = None
+
+
+class WebImportRequest(BaseModel):
+    url: str
+    title: Optional[str] = None
+    tags: Optional[list[str]] = Field(default_factory=list)
+    fetch_options: Optional[dict[str, Any]] = Field(default_factory=dict)
+    parent_id: Optional[str] = None
+
+
+class ReindexRequest(BaseModel):
+    mode: Literal["parse_only", "embed_only", "all"] = "all"
 
 
 class DiffEventCreateRequest(BaseModel):

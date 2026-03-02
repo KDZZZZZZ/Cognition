@@ -21,6 +21,8 @@ export function FileIcon({ type, size = 16, className }: IconProps) {
       return <Folder size={size} className={className || 'text-theme-text/60'} />;
     case 'pdf':
       return <FileText size={size} className={className || 'text-theme-text'} />;
+    case 'web':
+      return <FileText size={size} className={className || 'text-theme-text'} />;
     case 'md':
       return <FileCode size={size} className={className || 'text-theme-text'} />;
     case 'session':

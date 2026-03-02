@@ -26,8 +26,12 @@ export function Timeline() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const activeFileId =
-    panes.find((p) => p.id === activePaneId)?.activeTabId || null;
+  const activePane = panes.find((p) => p.id === activePaneId) || null;
+  const activeTab =
+    activePane?.tabs.find((tab) => tab.id === activePane.activeTabId) || null;
+  const activeFileId = activeTab?.id || null;
+  const activeFileNode = activeFileId ? findFile(activeFileId) : null;
+  const isSessionTab = activeTab?.type === 'session' || activeFileNode?.type === 'session';
 
   useEffect(() => {
     if (!activeFileId || !timelineExpanded) {
@@ -35,7 +39,7 @@ export function Timeline() {
       return;
     }
 
-    if (activeFileId.includes('_')) {
+    if (isSessionTab) {
       setTimeline([]);
       return;
     }
@@ -67,7 +71,7 @@ export function Timeline() {
     };
 
     fetchVersions();
-  }, [activeFileId, timelineExpanded, lastUpdated]);
+  }, [activeFileId, timelineExpanded, lastUpdated, isSessionTab]);
 
   const handleTimelineClick = async (item: TimelineItem) => {
     if (!activeFileId) return;
@@ -131,12 +135,11 @@ export function Timeline() {
 
   return (
     <div
-      className="border-t border-theme-border/30 paper-divider-dashed flex flex-col transition-colors duration-300"
-      style={{ height: timelineExpanded ? '35%' : 'auto', backgroundColor: 'var(--theme-surface)' }}
+      className="border-t border-theme-border/30 paper-divider-dashed flex flex-col transition-colors duration-300 surface-panel"
+      style={{ height: timelineExpanded ? '35%' : 'auto' }}
     >
       <div
-        className="p-2 border-b border-theme-border/30 paper-divider-dashed flex items-center justify-between cursor-pointer"
-        style={{ backgroundColor: 'var(--theme-surface-muted)' }}
+        className="p-2 border-b border-theme-border/30 paper-divider-dashed flex items-center justify-between cursor-pointer surface-panel-muted"
         onClick={toggleTimeline}
       >
         <div className="flex items-center gap-1 text-xs font-semibold tracking-[0.08em] text-theme-text/60 uppercase">
@@ -147,25 +150,34 @@ export function Timeline() {
           {loading && timelineExpanded && (
             <Loader2 size={12} className="animate-spin text-theme-text/50" />
           )}
-          {timelineExpanded && activeFileId && !activeFileId.includes('_') && (
+          {timelineExpanded && activeFileId && !isSessionTab && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
                 setLoading(true);
-                api.getFileVersions(activeFileId).then((response) => {
-                  if (response.success && response.data) {
-                    const versions = response.data.versions || [];
-                    const items: TimelineItem[] = versions.map((v: FileVersion) => ({
-                      id: v.id,
-                      date: new Date(v.timestamp).toLocaleString(),
-                      author: v.author === 'human' ? 'You' : 'AI',
-                      message: v.summary,
-                      changeType: v.change_type,
-                    }));
-                    setTimeline(items);
-                  }
-                  setLoading(false);
-                });
+                api
+                  .getFileVersions(activeFileId)
+                  .then((response) => {
+                    if (response.success && response.data) {
+                      const versions = response.data.versions || [];
+                      const items: TimelineItem[] = versions.map((v: FileVersion) => ({
+                        id: v.id,
+                        date: new Date(v.timestamp).toLocaleString(),
+                        author: v.author === 'human' ? 'You' : 'AI',
+                        message: v.summary,
+                        changeType: v.change_type,
+                      }));
+                      setTimeline(items);
+                      setError(null);
+                    } else {
+                      setError(response.error || 'Failed to refresh timeline');
+                    }
+                  })
+                  .catch((err) => {
+                    setError('Network error loading timeline');
+                    console.error('Failed to refresh timeline:', err);
+                  })
+                  .finally(() => setLoading(false));
               }}
               className="p-1 hover:bg-theme-text/10 rounded transition-colors"
               title="Refresh timeline"
@@ -179,12 +191,12 @@ export function Timeline() {
       {timelineExpanded && (
         <div className="flex-1 overflow-y-auto p-4">
           {!activeFileId ? (
-            <div className="text-xs text-theme-text/40 text-center mt-2">
+            <div className="mt-2 rounded-lg border border-dashed border-theme-border/25 bg-theme-bg/70 px-3 py-4 text-xs text-theme-text/45 text-center">
               No file active
             </div>
-          ) : activeFileId.includes('_') ? (
-            <div className="text-xs text-theme-text/40 text-center mt-2">
-              Local sessions don&apos;t have version history
+          ) : isSessionTab ? (
+            <div className="mt-2 rounded-lg border border-dashed border-theme-border/25 bg-theme-bg/70 px-3 py-4 text-xs text-theme-text/45 text-center">
+              Version history is shown for notes and PDFs. Open one to inspect changes.
             </div>
           ) : loading ? (
             <div className="flex items-center justify-center mt-4">
@@ -194,7 +206,7 @@ export function Timeline() {
           ) : error ? (
             <div className="text-xs text-red-500 text-center mt-2">{error}</div>
           ) : timeline.length === 0 ? (
-            <div className="text-xs text-theme-text/40 text-center mt-2">
+            <div className="mt-2 rounded-lg border border-dashed border-theme-border/25 bg-theme-bg/70 px-3 py-4 text-xs text-theme-text/45 text-center">
               No versions yet. Edit the file to create a version.
             </div>
           ) : (

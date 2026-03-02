@@ -3,22 +3,24 @@ Tool handlers initialization.
 
 This module initializes and registers all agent tools.
 """
-from app.services.tools.handlers.document_tool import (
-    ReadDocumentTool,
-)
 from app.services.tools.handlers.editor_ops import (
     UpdateFileTool,
     UpdateBlockTool,
     InsertBlockTool,
     DeleteBlockTool
 )
-from app.services.tools.handlers.pdf_tools import (
-    GetPdfMetadataTool,
-    ReadPdfPagesTool,
-    SearchPdfPassagesTool,
-    ReadVisiblePdfContextTool,
+from app.services.tools.handlers.task_tools import DeliverTaskTool, RegisterTaskTool
+from app.services.tools.handlers.control_tools import PauseForUserChoiceTool
+from app.services.tools.handlers.chart_tools import AddFileChartsToNoteTool
+from app.services.tools.handlers.visual_tools import InspectDocumentVisualTool
+from app.services.tools.handlers.reader_tools import (
+    ExplainRetrievalTool,
+    GetDocumentOutlineTool,
+    GetIndexStatusTool,
+    LocateRelevantSegmentsTool,
+    ReadDocumentSegmentsTool,
+    ReadWebpageBlocksTool,
 )
-from app.services.tools.handlers.search_tool import SearchDocumentsTool
 from app.services.tools.registry import register_tools
 
 
@@ -30,28 +32,31 @@ def initialize_tools() -> None:
     all available tools for the agent to use.
     """
     register_tools(
-        # Document tools
-        ReadDocumentTool(),
-
         # Editor Block Operations
         UpdateFileTool(),
         UpdateBlockTool(),
         InsertBlockTool(),
         DeleteBlockTool(),
 
-        # PDF-specialized tools
-        GetPdfMetadataTool(),
-        ReadPdfPagesTool(),
-        SearchPdfPassagesTool(),
-        ReadVisiblePdfContextTool(),
+        # Unified retrieval + deep-read tools
+        LocateRelevantSegmentsTool(),
+        ReadDocumentSegmentsTool(),
+        ReadWebpageBlocksTool(),
+        GetDocumentOutlineTool(),
+        ExplainRetrievalTool(),
+        GetIndexStatusTool(),
+        InspectDocumentVisualTool(),
 
-        # Search tools
-        SearchDocumentsTool(),
+        # Task lifecycle tools
+        RegisterTaskTool(),
+        DeliverTaskTool(),
+
+        # Control / utility tools
+        PauseForUserChoiceTool(),
+        AddFileChartsToNoteTool(),
     )
 
 
 __all__ = [
-    "ReadDocumentTool",
-    "SearchDocumentsTool",
     "initialize_tools"
 ]

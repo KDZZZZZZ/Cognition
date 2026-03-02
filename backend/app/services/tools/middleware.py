@@ -25,10 +25,10 @@ class PermissionMiddleware:
     """
 
     # File types that support write operations
-    WRITABLE_TYPES: Set[str] = {"md", "txt"}
+    WRITABLE_TYPES: Set[str] = {"md"}
 
     # File types that support read operations
-    READABLE_TYPES: Set[str] = {"md", "pdf", "docx", "txt"}
+    READABLE_TYPES: Set[str] = {"md", "pdf", "docx", "txt", "web"}
 
     def __init__(self):
         self._session_cache: Dict[str, Dict[str, PermissionLevel]] = {}

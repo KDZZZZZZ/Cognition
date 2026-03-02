@@ -101,9 +101,9 @@ def register_tools(*tools: BaseTool) -> None:
 
     Usage:
         register_tools(
-            ReadDocumentTool(),
-            UpdateDocumentTool(),
-            SearchDocumentsTool()
+            LocateRelevantSegmentsTool(),
+            ReadDocumentSegmentsTool(),
+            UpdateFileTool()
         )
     """
     for tool in tools:

@@ -197,6 +197,18 @@
   border-top: 2px dashed var(--theme-border-soft);
 }
 
+.tiptap-markdown-editor img,
+.tiptap-markdown-editor .tiptap-image-node {
+  display: block;
+  max-width: min(100%, 52rem);
+  height: auto;
+  margin: 1rem auto;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--theme-surface-muted) 90%, transparent);
+  box-shadow: 0 10px 24px rgba(16, 16, 16, 0.08);
+}
+
 .tiptap-markdown-editor a {
   color: var(--theme-text);
   text-decoration: underline;

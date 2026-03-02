@@ -5,29 +5,17 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 
 from app.models import Author, DiffEvent, DiffEventStatus, DiffLineSnapshot, File, FileType, LineDecision
+from app.services.diff_events import (
+    build_diff_line_snapshots,
+    get_effective_diff_base,
+    resolve_all_pending_diff_events,
+)
 from app.services.tools.base import BaseTool, PermissionLevel, ToolContext, ToolResult, ToolValidationError
 from app.websocket import manager
 
 
 def _build_line_snapshots(old_content: str, new_content: str) -> List[Dict[str, Any]]:
-    old_lines = old_content.splitlines()
-    new_lines = new_content.splitlines()
-    max_len = max(len(old_lines), len(new_lines))
-
-    snapshots = []
-    for i in range(max_len):
-        old_line = old_lines[i] if i < len(old_lines) else None
-        new_line = new_lines[i] if i < len(new_lines) else None
-        decision = LineDecision.PENDING if old_line != new_line else LineDecision.ACCEPTED
-        snapshots.append(
-            {
-                "line_no": i + 1,
-                "old_line": old_line,
-                "new_line": new_line,
-                "decision": decision,
-            }
-        )
-    return snapshots
+    return build_diff_line_snapshots(old_content, new_content)
 
 
 async def _create_pending_diff_event(
@@ -37,7 +25,13 @@ async def _create_pending_diff_event(
     new_content: str,
     summary: str,
 ) -> ToolResult:
-    if old_content == new_content:
+    base_content, current_content, pending_events = await get_effective_diff_base(
+        context.db,
+        file.id,
+        old_content,
+    )
+
+    if current_content == new_content:
         return ToolResult(
             success=True,
             data={
@@ -49,11 +43,37 @@ async def _create_pending_diff_event(
             },
         )
 
+    if base_content == new_content:
+        if pending_events:
+            await resolve_all_pending_diff_events(
+                context.db,
+                file.id,
+                replacement_content=base_content,
+            )
+            await context.db.commit()
+        return ToolResult(
+            success=True,
+            data={
+                "file_id": file.id,
+                "file_name": file.name,
+                "event_id": None,
+                "status": "noop",
+                "message": "No net content changes detected",
+            },
+        )
+
+    if pending_events:
+        await resolve_all_pending_diff_events(
+            context.db,
+            file.id,
+            replacement_content=current_content,
+        )
+
     event = DiffEvent(
         id=str(uuid.uuid4()),
         file_id=file.id,
         author=Author.AGENT,
-        old_content=old_content,
+        old_content=base_content,
         new_content=new_content,
         summary=summary,
         status=DiffEventStatus.PENDING,
@@ -61,7 +81,7 @@ async def _create_pending_diff_event(
     context.db.add(event)
     await context.db.flush()
 
-    for snapshot in _build_line_snapshots(old_content, new_content):
+    for snapshot in _build_line_snapshots(base_content, new_content):
         context.db.add(
             DiffLineSnapshot(
                 id=str(uuid.uuid4()),
@@ -111,6 +131,12 @@ def _read_text(path: str) -> str:
     return file_path.read_text(encoding="utf-8")
 
 
+async def _read_effective_text(db, file: File) -> str:
+    persisted = _read_text(file.path)
+    _, effective, _ = await get_effective_diff_base(db, file.id, persisted)
+    return effective
+
+
 class UpdateFileTool(BaseTool):
     @property
     def name(self) -> str:
@@ -149,14 +175,14 @@ class UpdateFileTool(BaseTool):
         if not file:
             return ToolResult(success=False, error=f"File {file_id} not found", error_code="FILE_NOT_FOUND")
 
-        if file.file_type not in [FileType.MD, FileType.TXT, FileType.CODE]:
+        if file.file_type != FileType.MD:
             return ToolResult(
                 success=False,
                 error=f"Cannot edit file type: {file.file_type}",
                 error_code="FILE_NOT_WRITABLE",
             )
 
-        old_content = _read_text(file.path)
+        old_content = await _read_effective_text(context.db, file)
         return await _create_pending_diff_event(context, file, old_content, new_content, summary)
 
 
@@ -209,7 +235,7 @@ class UpdateBlockTool(BaseTool):
                 error_code="FILE_NOT_WRITABLE",
             )
 
-        old_content = _read_text(file.path)
+        old_content = await _read_effective_text(context.db, file)
         blocks = old_content.split("\n\n") if old_content else [""]
         if block_index >= len(blocks):
             return ToolResult(
@@ -268,7 +294,7 @@ class InsertBlockTool(BaseTool):
                 error_code="FILE_NOT_WRITABLE",
             )
 
-        old_content = _read_text(file.path)
+        old_content = await _read_effective_text(context.db, file)
         blocks = old_content.split("\n\n") if old_content else []
         if after_block_index < -1 or after_block_index >= len(blocks):
             return ToolResult(
@@ -330,7 +356,7 @@ class DeleteBlockTool(BaseTool):
                 error_code="FILE_NOT_WRITABLE",
             )
 
-        old_content = _read_text(file.path)
+        old_content = await _read_effective_text(context.db, file)
         blocks = old_content.split("\n\n") if old_content else []
         if block_index >= len(blocks):
             return ToolResult(

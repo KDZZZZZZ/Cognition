@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut, RotateCw } from 'lucide-react';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
@@ -25,8 +25,24 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    setNumPages(0);
+    setPageNumber(1);
+  }, [filePath]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+    };
+  }, []);
+
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages);
+    setPageNumber((prev) => Math.min(Math.max(prev, 1), numPages));
     setLoading(false);
   }
 
@@ -42,6 +58,23 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
     }, 100);
   }
 
+  const scrollToPage = (targetPage: number, behavior: ScrollBehavior = 'smooth') => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const pageElement = container.querySelector(`[data-page-number="${targetPage}"]`) as HTMLElement | null;
+    if (!pageElement) return;
+
+    // Keep scrolling scoped to the PDF container to avoid page-level jump.
+    const containerRect = container.getBoundingClientRect();
+    const pageRect = pageElement.getBoundingClientRect();
+    const rawTop = container.scrollTop + (pageRect.top - containerRect.top) - 8;
+    const maxScrollTop = Math.max(container.scrollHeight - container.clientHeight, 0);
+    const targetTop = Math.max(0, Math.min(rawTop, maxScrollTop));
+
+    container.scrollTo({ top: targetTop, behavior });
+  };
+
   const handleScroll = () => {
     if (scrollTimeoutRef.current) {
       clearTimeout(scrollTimeoutRef.current);
@@ -51,6 +84,7 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
       if (containerRef.current && onScrollChange) {
         const scrollTop = containerRef.current.scrollTop;
         const scrollHeight = containerRef.current.scrollHeight;
+        if (numPages <= 0) return;
 
         // Calculate which page is visible
         const pageHeight = scrollHeight / numPages;
@@ -75,14 +109,8 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
       const clamped = Math.max(1, Math.min(newPage, numPages));
       onPageChange?.(clamped);
 
-      // Scroll to the page
       setTimeout(() => {
-        if (containerRef.current) {
-          const pageElement = containerRef.current.querySelector(`[data-page-number="${clamped}"]`) as HTMLElement;
-          if (pageElement) {
-            pageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }
-        }
+        scrollToPage(clamped, 'smooth');
       }, 50);
 
       return clamped;
@@ -99,12 +127,7 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
     onPageChange?.(clamped);
 
     setTimeout(() => {
-      if (containerRef.current) {
-        const pageElement = containerRef.current.querySelector(`[data-page-number="${clamped}"]`) as HTMLElement;
-        if (pageElement) {
-          pageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }
+      scrollToPage(clamped, 'smooth');
     }, 50);
   };
 
@@ -119,11 +142,12 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
 
   return (
     <div
-      className="flex flex-col h-full"
+      className="flex flex-col h-full min-h-0"
       style={{ backgroundColor: 'var(--theme-surface-muted)' }}
     >
       {/* Toolbar */}
       <div
+        data-testid="pdf-toolbar"
         className="flex items-center justify-between px-4 py-2 border-b border-theme-border/30 paper-divider-dashed"
         style={{ backgroundColor: 'var(--theme-surface)' }}
       >
@@ -192,9 +216,10 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
       {/* PDF Container */}
       <div
         ref={containerRef}
+        data-testid="pdf-scroll-container"
         onScroll={handleScroll}
-        className="flex-1 overflow-auto flex justify-center bg-theme-text/10"
-        style={{ scrollBehavior: 'smooth' }}
+        className="flex-1 min-h-0 overflow-auto flex justify-center bg-theme-text/10"
+        style={{ overscrollBehaviorY: 'contain' }}
       >
         {loading && (
           <div className="flex items-center justify-center h-full">
@@ -203,20 +228,21 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
         )}
 
         <Document
+          key={filePath}
           file={filePath}
           onLoadSuccess={onDocumentLoadSuccess}
           onLoadError={(error) => {
             setError(error.message);
             setLoading(false);
           }}
-          className="mt-4"
+          className="w-full flex flex-col items-center pt-3 pb-0"
         >
           {Array.from({ length: numPages }, (_, i) => (
             <div
               key={i}
               data-page-number={i + 1}
-              className="mb-4 bg-theme-bg border border-theme-border/20 paper-divider shadow-[0_3px_12px_rgba(16,16,16,0.12)]"
-              style={{ transform: `rotate(${rotation}deg)`, transformOrigin: 'center center' }}
+              className="mb-3 last:mb-0 bg-theme-bg border border-theme-border/20 paper-divider shadow-[0_3px_12px_rgba(16,16,16,0.12)]"
+              style={{ scrollMarginTop: '8px', transform: `rotate(${rotation}deg)`, transformOrigin: 'center center' }}
             >
               <Page
                 pageNumber={i + 1}
