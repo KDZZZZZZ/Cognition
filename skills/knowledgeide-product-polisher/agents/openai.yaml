@@ -1,0 +1,4 @@
+interface:
+  display_name: "KnowledgeIDE Product Polisher"
+  short_description: "Run key-path audit, frontend polish, and fix loop"
+  default_prompt: "Start backend and frontend, execute the 8-step GUI key path audit, fix regressions, improve frontend UX, and re-run validation until all checkpoints pass."

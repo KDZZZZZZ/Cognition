@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,66 @@ const repoRoot = path.resolve(__dirname, '../../../');
 const frontendUrl = process.env.E2E_BASE_URL || 'http://localhost:5174';
 const apiBase = process.env.E2E_API_BASE || 'http://127.0.0.1:8000';
 const useRealLlm = String(process.env.E2E_REAL_LLM || '').toLowerCase() === 'true';
+
+function resolveBackendPythonCommand() {
+  const localVenvPython = process.platform === 'win32'
+    ? path.join(repoRoot, 'backend', 'venv', 'Scripts', 'python.exe')
+    : path.join(repoRoot, 'backend', 'venv', 'bin', 'python');
+
+  const candidates = [];
+
+  if (fs.existsSync(localVenvPython)) {
+    candidates.push({
+      command: localVenvPython,
+      probeArgs: ['--version'],
+      runArgs: ['backend/main.py'],
+      display: `${localVenvPython} backend/main.py`,
+    });
+  }
+
+  if (process.platform === 'win32') {
+    candidates.push(
+      {
+        command: 'python',
+        probeArgs: ['--version'],
+        runArgs: ['backend/main.py'],
+        display: 'python backend/main.py',
+      },
+      {
+        command: 'py',
+        probeArgs: ['-3', '--version'],
+        runArgs: ['-3', 'backend/main.py'],
+        display: 'py -3 backend/main.py',
+      }
+    );
+  } else {
+    candidates.push(
+      {
+        command: 'python',
+        probeArgs: ['--version'],
+        runArgs: ['backend/main.py'],
+        display: 'python backend/main.py',
+      },
+      {
+        command: 'python3',
+        probeArgs: ['--version'],
+        runArgs: ['backend/main.py'],
+        display: 'python3 backend/main.py',
+      }
+    );
+  }
+
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate.command, candidate.probeArgs, {
+      cwd: repoRoot,
+      shell: false,
+      stdio: 'ignore',
+    });
+    if (probe.status === 0) return candidate;
+  }
+
+  return null;
+}
 
 function runCommand(command, args, cwd, name) {
   return new Promise((resolveExit) => {
@@ -80,18 +141,44 @@ async function main() {
     process.env.E2E_REAL_LLM = useRealLlm ? 'true' : 'false';
 
     if (useRealLlm) {
-      if (!process.env.OPENAI_API_KEY) {
-        console.error('[audit] E2E_REAL_LLM=true requires OPENAI_API_KEY in environment.');
+      const provider = String(process.env.E2E_LLM_PROVIDER || 'moonshot').toLowerCase();
+      const moonshotKey = process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY || process.env.OPENAI_API_KEY;
+      const deepseekKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
+
+      if (provider === 'deepseek' && !deepseekKey) {
+        console.error('[audit] E2E_REAL_LLM=true with provider=deepseek requires DEEPSEEK_API_KEY (or OPENAI_API_KEY fallback).');
         process.exitCode = 1;
         return;
       }
-      if (!process.env.OPENAI_BASE_URL) {
-        process.env.OPENAI_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+      if (provider !== 'deepseek' && !moonshotKey) {
+        console.error('[audit] E2E_REAL_LLM=true with provider=moonshot requires MOONSHOT_API_KEY/KIMI_API_KEY (or OPENAI_API_KEY fallback).');
+        process.exitCode = 1;
+        return;
       }
-      if (!process.env.DEFAULT_MODEL) {
-        process.env.DEFAULT_MODEL = 'qwen-plus';
+
+      if (provider === 'deepseek') {
+        if (!process.env.DEEPSEEK_API_KEY) {
+          process.env.DEEPSEEK_API_KEY = deepseekKey;
+        }
+        if (!process.env.DEEPSEEK_BASE_URL) {
+          process.env.DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
+        }
+        if (!process.env.DEFAULT_MODEL) {
+          process.env.DEFAULT_MODEL = 'deepseek-chat';
+        }
+        console.log(`[audit] real-llm mode enabled (provider=deepseek, base=${process.env.DEEPSEEK_BASE_URL}, model=${process.env.DEFAULT_MODEL})`);
+      } else {
+        if (!process.env.MOONSHOT_API_KEY) {
+          process.env.MOONSHOT_API_KEY = moonshotKey;
+        }
+        if (!process.env.MOONSHOT_BASE_URL) {
+          process.env.MOONSHOT_BASE_URL = 'https://api.moonshot.cn/v1';
+        }
+        if (!process.env.DEFAULT_MODEL) {
+          process.env.DEFAULT_MODEL = 'kimi-latest';
+        }
+        console.log(`[audit] real-llm mode enabled (provider=moonshot, base=${process.env.MOONSHOT_BASE_URL}, model=${process.env.DEFAULT_MODEL})`);
       }
-      console.log(`[audit] real-llm mode enabled (base=${process.env.OPENAI_BASE_URL}, model=${process.env.DEFAULT_MODEL})`);
     } else {
       console.log('[audit] mock-llm mode enabled (deterministic regression mode).');
     }
@@ -100,8 +187,15 @@ async function main() {
 
     const backendHealthy = await waitForUrl(`${apiBase}/health`, 3000);
     if (!backendHealthy) {
-      console.log('[audit] backend not detected, starting `python backend/main.py`');
-      const backend = startService('python', ['backend/main.py'], repoRoot, 'backend');
+      const backendPython = resolveBackendPythonCommand();
+      if (!backendPython) {
+        console.error('[audit] backend not detected and no Python runtime found (`python`/`python3`/`py -3`).');
+        process.exitCode = 1;
+        return;
+      }
+
+      console.log(`[audit] backend not detected, starting \`${backendPython.display}\``);
+      const backend = startService(backendPython.command, backendPython.runArgs, repoRoot, 'backend');
       managed.push({ child: backend, name: 'backend' });
     } else {
       console.log('[audit] backend already running, reusing existing service.');

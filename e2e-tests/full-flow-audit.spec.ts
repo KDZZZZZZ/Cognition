@@ -24,10 +24,12 @@ interface BackendFile {
   type: string;
 }
 
-const API_BASE = process.env.E2E_API_BASE || 'http://localhost:8000';
+const API_BASE = process.env.E2E_API_BASE || 'http://127.0.0.1:8000';
 const USE_REAL_LLM = String(process.env.E2E_REAL_LLM || '').toLowerCase() === 'true';
 const REPORT_PATH = path.resolve(process.cwd(), 'reports/e2e/full-flow-audit-report.md');
 const ARTIFACT_DIR = path.resolve(process.cwd(), 'reports/e2e/artifacts');
+const CAPTURE_PASS_SHOTS = String(process.env.E2E_CAPTURE_PASS_SHOTS || '').toLowerCase() === 'true';
+const PASS_ARTIFACT_DIR = path.resolve(process.cwd(), 'reports/e2e/artifacts/pass');
 
 function errMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -113,6 +115,9 @@ async function writeReport(
 test('knowledgeide full user flow audit', async ({ page, request }) => {
   const startedAt = new Date();
   await fs.mkdir(ARTIFACT_DIR, { recursive: true });
+  if (CAPTURE_PASS_SHOTS) {
+    await fs.mkdir(PASS_ARTIFACT_DIR, { recursive: true });
+  }
 
   const results: AuditItem[] = [];
   const chatCaptures: ChatCapture[] = [];
@@ -120,6 +125,12 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
   const networkErrors: string[] = [];
 
   const runId = Date.now();
+  const runArtifactDir = path.resolve(ARTIFACT_DIR, String(runId));
+  const runPassArtifactDir = path.resolve(PASS_ARTIFACT_DIR, String(runId));
+  await fs.mkdir(runArtifactDir, { recursive: true });
+  if (CAPTURE_PASS_SHOTS) {
+    await fs.mkdir(runPassArtifactDir, { recursive: true });
+  }
   const folderName = `audit-folder-${runId}`;
   const noteName = `audit-note-${runId}.md`;
   const sessionName = `audit-session-${runId}`;
@@ -128,10 +139,11 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
   let activePdfNameA = pdfNameA;
   let activePdfNameB = pdfNameB;
 
-  const sidebar = page.locator('div.w-64').first();
+  const sidebar = page.locator('button[aria-label="Resize sidebar"]').first().locator('xpath=ancestor::div[1]');
 
   let noteFileId = '';
   let hiddenPdfId = '';
+  let sessionFileId = '';
 
   page.on('console', (msg) => {
     if (msg.type() === 'error' || msg.type() === 'warning') {
@@ -172,9 +184,19 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
   ) => {
     try {
       const details = await fn();
-      results.push({ id, title, status: 'PASS', details });
+      let passEvidence: string | undefined;
+      if (CAPTURE_PASS_SHOTS) {
+        const passScreenshotPath = path.resolve(runPassArtifactDir, `${id.replaceAll('.', '-')}-pass.png`);
+        try {
+          await page.screenshot({ path: passScreenshotPath, fullPage: true });
+          passEvidence = path.relative(process.cwd(), passScreenshotPath).replaceAll('\\', '/');
+        } catch {
+          // Best effort pass screenshot.
+        }
+      }
+      results.push({ id, title, status: 'PASS', details, evidence: passEvidence });
     } catch (error) {
-      const screenshotPath = path.resolve(ARTIFACT_DIR, `${id.replaceAll('.', '-')}.png`);
+      const screenshotPath = path.resolve(runArtifactDir, `${id.replaceAll('.', '-')}.png`);
       try {
         await page.screenshot({ path: screenshotPath, fullPage: true });
       } catch {
@@ -206,7 +228,11 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
   };
 
   const clickQuickAction = async (title: string) => {
-    const button = sidebar.locator(`button[title="${title}"]`).first();
+    const rootPathAddButton = sidebar.locator('button[title="Add at current path"]').first();
+    await expect(rootPathAddButton).toBeVisible();
+    await rootPathAddButton.click();
+
+    const button = page.getByRole('button', { name: title }).first();
     await expect(button).toBeVisible();
     await button.click();
   };
@@ -224,21 +250,24 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
     await node.click();
   };
 
-  const clickTab = async (name: string) => {
+  const clickTab = async (tabRef: string) => {
+    const tabById = page.locator(`div[draggable="true"][data-tab-id="${tabRef}"]`).first();
+    if (await tabById.count()) {
+      await expect(tabById).toBeVisible();
+      await tabById.click();
+      return;
+    }
+
     const tab = page
-      .locator('div.flex.items-center.h-9')
       .locator('div[draggable="true"]')
-      .filter({ hasText: name })
+      .filter({ hasText: tabRef })
       .first();
     await expect(tab).toBeVisible();
     await tab.click();
   };
 
-  const setPermissionByName = async (name: string, targetTitle: string) => {
-    const permissionChip = page
-      .locator('div.flex.items-center.gap-2.bg-theme-bg')
-      .filter({ hasText: name })
-      .first();
+  const setPermissionByFileId = async (fileId: string, targetTitle: string) => {
+    const permissionChip = page.locator(`[data-context-file-id="${fileId}"]`).first();
     const permissionButton = permissionChip.locator('button[title]').first();
 
     await expect(permissionButton).toBeVisible({ timeout: 10_000 });
@@ -251,7 +280,20 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
     }
 
     const actual = await permissionButton.getAttribute('title');
-    throw new Error(`Permission for ${name} did not reach "${targetTitle}". current="${actual}"`);
+    throw new Error(`Permission for ${fileId} did not reach "${targetTitle}". current="${actual}"`);
+  };
+
+  const waitForCapturedRequest = async (
+    matcher: (capture: ChatCapture) => boolean,
+    timeoutMs = 10_000
+  ): Promise<ChatCapture | null> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const found = [...chatCaptures].reverse().find(matcher);
+      if (found) return found;
+      await page.waitForTimeout(150);
+    }
+    return [...chatCaptures].reverse().find(matcher) || null;
   };
 
   if (!USE_REAL_LLM) {
@@ -333,7 +375,7 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
     });
 
     await runStep('2', 'Create a new folder', async () => {
-      await clickQuickAction('New Folder (supports path: folder1/folder2)');
+      await clickQuickAction('New Folder');
       await fillDialogAndCreate(folderName);
       await expect(sidebar.locator('span.truncate', { hasText: folderName }).first()).toBeVisible();
       return `Created folder "${folderName}".`;
@@ -357,7 +399,7 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
         uploadFailureReason = errMessage(error);
       }
 
-      await clickQuickAction('New File (supports path: folder/file.md)');
+      await clickQuickAction('New File');
       await fillDialogAndCreate(noteName);
       await expect(sidebar.locator('span.truncate', { hasText: noteName }).first()).toBeVisible();
 
@@ -377,6 +419,13 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
 
       noteFileId = (await waitForBackendFileByName(noteName)).id;
       hiddenPdfId = (await waitForBackendFileByName(activePdfNameA)).id;
+      const sessionBackendFile = await waitForBackendFileByName(sessionName).catch(() => null);
+      sessionFileId = sessionBackendFile?.id || '';
+      if (!sessionFileId) {
+        const sessionTab = page.locator('div[draggable="true"]').filter({ hasText: sessionName }).first();
+        const sessionTabId = await sessionTab.getAttribute('data-tab-id').catch(() => null);
+        sessionFileId = sessionTabId || '';
+      }
 
       if (uploadFailed) {
         throw new Error(
@@ -384,7 +433,7 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
         );
       }
 
-      return `Created note=${noteFileId}, hidden candidate pdf=${hiddenPdfId}.`;
+      return `Created note=${noteFileId}, session=${sessionFileId}, hidden candidate pdf=${hiddenPdfId}.`;
     });
 
     await runStep('4', 'Create 3 panes and drag pdf/note/session across panes', async () => {
@@ -412,23 +461,45 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
 
       await noteTab.dragTo(emptyPaneTarget);
       await page.waitForTimeout(500);
-      const emptyPanesAfter = await page.locator('p:has-text("Empty Pane")').count();
+      const emptyPanesAfterFirstDrag = await page.locator('p:has-text("Empty Pane")').count();
 
-      if (emptyPanesAfter >= emptyPanesBefore) {
-        throw new Error(`Drag did not reduce empty panes (before=${emptyPanesBefore}, after=${emptyPanesAfter}).`);
+      if (emptyPanesAfterFirstDrag !== Math.max(0, emptyPanesBefore - 1)) {
+        throw new Error(
+          `First drag did not consume exactly one empty pane (before=${emptyPanesBefore}, after=${emptyPanesAfterFirstDrag}).`
+        );
       }
 
-      return `Panes created and drag operation changed pane occupancy (${emptyPanesBefore} -> ${emptyPanesAfter}).`;
+      const sessionTab = page
+        .locator('div.flex.items-center.h-9')
+        .locator('div[draggable="true"]')
+        .filter({ hasText: sessionName })
+        .first();
+      const secondEmptyPaneTarget = page.locator('div.flex-1.min-w-\\[320px\\]:has-text("Empty Pane")').first();
+      await sessionTab.dragTo(secondEmptyPaneTarget);
+      await page.waitForTimeout(500);
+
+      const emptyPanesAfter = await page.locator('p:has-text("Empty Pane")').count();
+      if (emptyPanesAfter !== 0) {
+        throw new Error(`Expected all 3 panes to be occupied, but found ${emptyPanesAfter} empty pane(s).`);
+      }
+
+      const tabContainer = page.locator('div.flex.items-center.h-9').first();
+      await expect(tabContainer.locator('div[draggable="true"]').filter({ hasText: activePdfNameA }).first()).toBeVisible();
+      await expect(page.locator('div[draggable="true"]').filter({ hasText: noteName }).first()).toBeVisible();
+      await expect(page.locator('div[draggable="true"]').filter({ hasText: sessionName }).first()).toBeVisible();
+
+      return `Panes created and all 3 panes occupied (${emptyPanesBefore} -> ${emptyPanesAfter}).`;
     });
 
     await runStep('5', 'Hide one PDF and verify visible list from agent response', async () => {
-      await clickTab(sessionName);
+      await clickTab(sessionFileId || sessionName);
 
-      await setPermissionByName(noteName, 'Write permission');
-      await setPermissionByName(activePdfNameA, 'Hidden from AI');
+      await setPermissionByFileId(noteFileId, 'Write permission');
+      await setPermissionByFileId(hiddenPdfId, 'Hidden from AI');
 
-      const chatInput = page.locator('textarea[placeholder^="Type a message"]');
-      await chatInput.fill('请列出你当前可见的文件ID。');
+      const visibilityPrompt = '请列出你当前可见的文件ID。';
+      const chatInput = page.locator('textarea[placeholder^="Type a message"]').first();
+      await chatInput.fill(visibilityPrompt);
       await chatInput.press('Enter');
 
       if (USE_REAL_LLM) {
@@ -438,9 +509,9 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
         await expect(visibleReply).toBeVisible({ timeout: 15_000 });
       }
 
-      const latestVisibleCapture = [...chatCaptures]
-        .reverse()
-        .find((capture) => capture.message.includes('可见文件ID') || capture.message.includes('可见'));
+      const latestVisibleCapture = await waitForCapturedRequest(
+        (capture) => capture.message === visibilityPrompt || capture.message.includes('可见'),
+      );
 
       if (!latestVisibleCapture) {
         throw new Error('No captured visibility request found.');
@@ -458,11 +529,11 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
     });
 
     await runStep('6', 'Ask agent to write summary and expect immediate note diff with markdown rendering', async () => {
-      await clickTab(activePdfNameA);
+      await clickTab(hiddenPdfId || activePdfNameA);
       await page.waitForTimeout(800);
-      await clickTab(sessionName);
+      await clickTab(sessionFileId || sessionName);
 
-      const chatInput = page.locator('textarea[placeholder^="Type a message"]');
+      const chatInput = page.locator('textarea[placeholder^="Type a message"]').first();
       await chatInput.fill('请根据我当前阅读内容在note中写入概括，保留代码块和公式。');
       await chatInput.press('Enter');
 
@@ -474,12 +545,17 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
         ).toBeVisible({ timeout: 15_000 });
       }
 
-      await clickTab(noteName);
+      await openTreeItem(noteName);
+      await clickTab(noteFileId || noteName);
+      const exitDiffVisible = await page.getByRole('button', { name: 'Exit Diff' }).isVisible().catch(() => false);
+      if (exitDiffVisible) {
+        throw new Error('Step 6 entered version diff view unexpectedly; expected note-view pending diff controls.');
+      }
 
       // Real LLM mode smoke fallback: if the model did not trigger a diff event,
       // create one deterministic event so downstream UI checks remain executable.
       if (USE_REAL_LLM) {
-        const hasDiffControls = await page.getByRole('button', { name: 'Accept All' }).isVisible().catch(() => false);
+        const hasDiffControls = (await page.locator('button:visible', { hasText: 'Accept All' }).count()) > 0;
         if (!hasDiffControls) {
           const currentContentRes = await request.get(`${API_BASE}/api/v1/files/${noteFileId}/content`);
           const currentContentJson = await currentContentRes.json();
@@ -503,14 +579,15 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
             },
           });
           await page.reload();
-          await clickTab(noteName);
+          await openTreeItem(noteName);
+          await clickTab(noteFileId || noteName);
         }
       }
 
-      const acceptAll = page.getByRole('button', { name: 'Accept All' });
-      const rejectAll = page.getByRole('button', { name: 'Reject All' });
-      const hasAcceptAll = await acceptAll.isVisible().catch(() => false);
-      const hasRejectAll = await rejectAll.isVisible().catch(() => false);
+      const acceptAllButtons = page.locator('button:visible', { hasText: /^Accept All$/ });
+      const rejectAllButtons = page.locator('button:visible', { hasText: /^Reject All$/ });
+      const hasAcceptAll = (await acceptAllButtons.count()) > 0;
+      const hasRejectAll = (await rejectAllButtons.count()) > 0;
 
       if (!hasAcceptAll || !hasRejectAll) {
         throw new Error('Immediate diff controls are not shown on note view after agent edit.');
@@ -527,27 +604,61 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
     });
 
     await runStep('7', 'Do line-level reject then top-level accept all in note view', async () => {
-      const rejectAtCursor = page.getByRole('button', { name: 'Reject' }).first();
-      const acceptAll = page.getByRole('button', { name: 'Accept All' });
+      const exitDiffVisible = await page.getByRole('button', { name: 'Exit Diff' }).isVisible().catch(() => false);
+      if (exitDiffVisible) {
+        throw new Error('Step 7 is running in version diff view; expected note-view line controls.');
+      }
 
-      const hasRejectAtCursor = await rejectAtCursor.isVisible().catch(() => false);
-      const hasAcceptAll = await acceptAll.isVisible().catch(() => false);
-      if (!hasRejectAtCursor || !hasAcceptAll) {
-        throw new Error('Line-level reject or top-level accept-all control is unavailable in note view.');
+      const acceptAllButtons = page.locator('button:visible', { hasText: /^Accept All$/ });
+
+      const hasAcceptAll = (await acceptAllButtons.count()) > 0;
+      if (!hasAcceptAll) {
+        throw new Error('Top-level accept-all control is unavailable in note view.');
       }
 
       const diffToken = page.locator('.diff-addition, .diff-deletion').first();
       await expect(diffToken).toBeVisible({ timeout: 10_000 });
       await diffToken.click();
+      const rejectAtCursor = page.locator('button:visible', { hasText: /^Reject$/ }).first();
+      await expect(rejectAtCursor).toBeVisible({ timeout: 10_000 });
+      if (CAPTURE_PASS_SHOTS) {
+        const cursorActionPath = path.resolve(runPassArtifactDir, '7-line-action-pass.png');
+        await page.screenshot({ path: cursorActionPath, fullPage: true });
+      }
+      const pendingTextBefore = await page
+        .locator('div')
+        .filter({ hasText: 'pending line' })
+        .first()
+        .textContent()
+        .catch(() => null);
+      const pendingCountBefore = Number((pendingTextBefore || '').match(/(\d+)\s+pending line/)?.[1] || '0');
       await rejectAtCursor.click();
-      await acceptAll.click();
+      await page.waitForTimeout(350);
+      const pendingTextAfterReject = await page
+        .locator('div')
+        .filter({ hasText: 'pending line' })
+        .first()
+        .textContent()
+        .catch(() => null);
+      const pendingCountAfterReject = Number((pendingTextAfterReject || '').match(/(\d+)\s+pending line/)?.[1] || '0');
+      if (pendingCountBefore > 0 && pendingCountAfterReject >= pendingCountBefore) {
+        throw new Error(
+          `Line-level reject did not reduce pending lines (before=${pendingCountBefore}, after=${pendingCountAfterReject}).`
+        );
+      }
+      await acceptAllButtons.first().click();
       await page.waitForTimeout(500);
+      const stillHasReject = (await page.locator('button:visible', { hasText: /^Reject$/ }).count()) > 0;
+      if (stillHasReject) {
+        throw new Error('Pending diff controls still visible after Accept All.');
+      }
 
       return 'Executed line-level reject and top-level accept-all sequence.';
     });
 
     await runStep('8', 'Open version diff page and validate code/math + history consistency', async () => {
-      await clickTab(noteName);
+      await openTreeItem(noteName);
+      await clickTab(noteFileId || noteName);
       const timelineHeader = sidebar.getByText('Timeline', { exact: true }).first();
       const versionItem = sidebar.getByText('Accept all pending diff lines').first();
 
@@ -679,20 +790,18 @@ test('knowledgeide full user flow audit', async ({ page, request }) => {
     }
 
     if (!results.find((item) => item.id === 'X4')) {
-      const pdfTools = new Set([
-        'read_visible_pdf_context',
-        'read_pdf_pages',
-        'search_pdf_passages',
-        'get_pdf_metadata',
+      const ragTools = new Set([
+        'locate_relevant_segments',
+        'read_document_segments',
       ]);
-      const usedPdfTool = toolNames.some((name) => pdfTools.has(name));
+      const usedRagTool = toolNames.some((name) => ragTools.has(name));
       results.push({
         id: 'X4',
-        title: 'Expanded check: PDF tool selection',
-        status: usedPdfTool ? 'PASS' : 'WARN',
-        details: usedPdfTool
-          ? `Detected PDF tool usage: ${toolNames.filter((name) => pdfTools.has(name)).join(', ')}`
-          : 'No PDF-specialized tool usage observed in captured tool calls.',
+        title: 'Expanded check: unified RAG tool selection',
+        status: usedRagTool ? 'PASS' : 'WARN',
+        details: usedRagTool
+          ? `Detected unified RAG tool usage: ${toolNames.filter((name) => ragTools.has(name)).join(', ')}`
+          : 'No unified RAG tool usage observed in captured tool calls.',
       });
     }
 

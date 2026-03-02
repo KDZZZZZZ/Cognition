@@ -149,7 +149,10 @@ Some initial content here.
         try:
             request_data = {
                 "session_id": self.session_id,
-                "message": f"Please use the read_document tool to read the PDF document with file_id '{self.test_files['pdf']}' and summarize its first page.",
+                "message": (
+                    f"Please use locate_relevant_segments and read_document_segments to read the PDF "
+                    f"document with file_id '{self.test_files['pdf']}' and summarize its first page."
+                ),
                 "context_files": [self.test_files["pdf"]]
             }
 
@@ -198,7 +201,10 @@ Some initial content here.
         try:
             request_data = {
                 "session_id": self.session_id,
-                "message": f"Please use the read_document tool to read the markdown file with file_id '{self.test_files['md']}' and tell me what sections it contains.",
+                "message": (
+                    f"Please use locate_relevant_segments and read_document_segments to read the markdown "
+                    f"file with file_id '{self.test_files['md']}' and tell me what sections it contains."
+                ),
                 "context_files": [self.test_files["md"]]
             }
 
@@ -233,7 +239,11 @@ Some initial content here.
         try:
             request_data = {
                 "session_id": self.session_id,
-                "message": f"Please use the append_document tool to add a new section '## Section 3' with content 'This section was added by the AI agent.' to the markdown file with file_id '{self.test_files['md']}'.",
+                "message": (
+                    f"Please use update_file to propose adding a new section '## Section 3' with content "
+                    f"'This section was added by the AI agent.' to the markdown file with file_id "
+                    f"'{self.test_files['md']}'."
+                ),
                 "context_files": [self.test_files["md"]]
             }
 
@@ -253,14 +263,14 @@ Some initial content here.
 
                 # Check if update tool was called
                 update_tool_used = any(
-                    tr.get("tool") in ["update_document", "append_document"]
+                    tr.get("tool") in ["update_file", "update_block", "insert_block", "delete_block"]
                     for tr in tool_results
                 )
 
                 if update_tool_used:
                     print(f"  ✓ Document modification tool was called")
                     for tr in tool_results:
-                        if tr.get("tool") in ["update_document", "append_document"]:
+                        if tr.get("tool") in ["update_file", "update_block", "insert_block", "delete_block"]:
                             result = tr.get("result", {})
                             if result.get("success"):
                                 print(f"    ✓ {tr['tool']}: Success")
@@ -281,8 +291,8 @@ Some initial content here.
             return False
 
     async def test_7_verify_markdown_changes(self):
-        """Test 7: Verify markdown was actually changed"""
-        print("\n=== Test 7: Verify Markdown Changes ===")
+        """Test 7: Verify pending diff event exists"""
+        print("\n=== Test 7: Verify Pending Diff Event ===")
 
         if "md" not in self.test_files:
             print("⚠ Skipping - no markdown available")
@@ -290,27 +300,22 @@ Some initial content here.
 
         try:
             response = await self.client.get(
-                f"{BASE_URL}/files/{self.test_files['md']}/content"
+                f"{BASE_URL}/files/{self.test_files['md']}/diff-events/pending"
             )
             response.raise_for_status()
             data = response.json()
 
             if data.get("success"):
-                content = data["data"]["content"]
-
-                # Check if Section 3 was added
-                if "## Section 3" in content:
-                    print(f"✓ Markdown file was successfully modified")
-                    print(f"  Content preview:")
-                    print("  " + "\n  ".join(content.split("\n")[:15]))
+                pending = data.get("data", {}).get("event")
+                if pending:
+                    print("✓ Pending diff event created")
+                    print(f"  Event ID: {pending.get('id')}")
+                    print(f"  Summary: {pending.get('summary')}")
                     return True
-                else:
-                    print(f"✗ Section 3 not found in modified file")
-                    print(f"  Current content:")
-                    print("  " + "\n  ".join(content.split("\n")[:10]))
-                    return False
+                print("✗ No pending diff event found")
+                return False
             else:
-                print(f"✗ Failed to get content: {data.get('error')}")
+                print(f"✗ Failed to query pending diff event: {data.get('error')}")
                 return False
 
         except Exception as e:

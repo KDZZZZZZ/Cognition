@@ -56,7 +56,7 @@ test('KnowledgeIDE_2026-02-01', async ({ page, context }) => {
     await page.click('button[title="Close tab"]');
 
     // Click element
-    await page.click('[role='tab'] button svg');
+    await page.click("[role='tab'] button svg");
 
     // Take screenshot
     await page.screenshot({ path: 'after-close.png' });
@@ -80,7 +80,7 @@ test('KnowledgeIDE_2026-02-01', async ({ page, context }) => {
     await page.screenshot({ path: 'after-typing.png' });
 
     // Click element
-    await page.click('[role='tab']:has-text('TestSession')');
+    await page.click("[role='tab']:has-text('TestSession')");
 
     // Take screenshot
     await page.screenshot({ path: 'before-session-click.png' });

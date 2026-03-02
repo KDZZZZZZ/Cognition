@@ -7,6 +7,12 @@ description: Run Playwright end-to-end audits for this KnowledgeIDE repository. 
 
 Execute the repository's full user-flow audit with Playwright, capture regressions, and write findings to the fixed report path.
 
+This skill also supports feature-catalog and gate-based coverage workflows:
+- Build catalog from API routes + tools + UI tree: `npm run e2e:catalog`
+- Run full coverage orchestration with gate decision (MCP mode): `npm run e2e:coverage`
+- Run full coverage orchestration with Playwright Test runner (legacy): `npm run e2e:coverage:pwtest`
+- Validate pipeline wiring without executing browser tests: `npm run e2e:coverage:dry`
+
 ## Workflow
 
 1. Run the automated flow:
@@ -27,6 +33,17 @@ Before running, choose execution mode:
 
 4. Extend checks directly in:
 `e2e-tests/full-flow-audit.spec.ts`
+
+5. For feature-level governance (full plan mode):
+- Generated catalogs:
+  - `reports/e2e/catalog/routes.json`
+  - `reports/e2e/catalog/tools.json`
+  - `reports/e2e/catalog/ui-tree.json`
+  - `reports/e2e/catalog/features.json`
+  - `reports/e2e/catalog/test-paths.json`
+- Coverage outputs:
+  - `reports/e2e/feature-coverage-report.md`
+  - `reports/e2e/feature-coverage-matrix.json`
 
 ## Mandatory Obligations
 

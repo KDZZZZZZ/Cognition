@@ -3,8 +3,10 @@ import asyncio
 from httpx import AsyncClient, ASGITransport
 from pathlib import Path
 import io
+from unittest.mock import AsyncMock
 
 from main import app
+from app.api import files as files_api
 from app.database import async_session_maker
 from app.models import File, DocumentChunk, Session, ChatMessage
 from sqlalchemy import select
@@ -75,9 +77,41 @@ class TestHealthEndpoints:
 class TestFileUpload:
     """Test file upload endpoints."""
 
+    @staticmethod
+    def _mock_indexing(monkeypatch: pytest.MonkeyPatch):
+        async def fake_parse_file(path: str, file_id: str, file_type: str):  # noqa: ARG001
+            return (
+                [
+                    DocumentChunk(
+                        id=f"chunk-{file_id}",
+                        file_id=file_id,
+                        page=1,
+                        chunk_index=0,
+                        content="Parsed content",
+                        bbox=None,
+                    )
+                ],
+                {"page_count": 1},
+            )
+
+        monkeypatch.setattr(
+            files_api.parser,
+            "parse_file",
+            AsyncMock(side_effect=fake_parse_file),
+        )
+        monkeypatch.setattr(files_api.reader_orchestrator.embedding_provider, "is_enabled", lambda: True)
+        monkeypatch.setattr(files_api.vector_store, "enabled", True)
+        monkeypatch.setattr(files_api.llm_service, "supports_embeddings", lambda: False)
+        monkeypatch.setattr(
+            files_api.reader_orchestrator,
+            "build_segments_for_file",
+            AsyncMock(return_value={"parse_status": "ready", "embedding_status": "ready"}),
+        )
+
     @pytest.mark.asyncio
-    async def test_upload_text_file(self, client: AsyncClient, sample_text_file):
+    async def test_upload_text_file(self, client: AsyncClient, sample_text_file, monkeypatch: pytest.MonkeyPatch):
         """Test uploading a text file."""
+        self._mock_indexing(monkeypatch)
         files = {"file": ("test.txt", sample_text_file, "text/plain")}
         response = await client.post("/api/v1/files/upload", files=files)
 
@@ -97,9 +131,10 @@ class TestFileUpload:
         assert "Unsupported file type" in response.json()["detail"]
 
     @pytest.mark.asyncio
-    async def test_list_files(self, client: AsyncClient, sample_text_file):
+    async def test_list_files(self, client: AsyncClient, sample_text_file, monkeypatch: pytest.MonkeyPatch):
         """Test listing all files."""
         # First upload a file
+        self._mock_indexing(monkeypatch)
         files = {"file": ("test.txt", sample_text_file, "text/plain")}
         await client.post("/api/v1/files/upload", files=files)
 
@@ -112,9 +147,10 @@ class TestFileUpload:
         assert len(data["data"]["files"]) >= 1
 
     @pytest.mark.asyncio
-    async def test_get_file(self, client: AsyncClient, sample_text_file):
+    async def test_get_file(self, client: AsyncClient, sample_text_file, monkeypatch: pytest.MonkeyPatch):
         """Test getting a specific file."""
         # Upload a file first
+        self._mock_indexing(monkeypatch)
         files = {"file": ("test.txt", sample_text_file, "text/plain")}
         upload_response = await client.post("/api/v1/files/upload", files=files)
         file_id = upload_response.json()["data"]["file_id"]
@@ -133,9 +169,10 @@ class TestFileUpload:
         assert response.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_delete_file(self, client: AsyncClient, sample_text_file):
+    async def test_delete_file(self, client: AsyncClient, sample_text_file, monkeypatch: pytest.MonkeyPatch):
         """Test deleting a file."""
         # Upload a file first
+        self._mock_indexing(monkeypatch)
         files = {"file": ("test.txt", sample_text_file, "text/plain")}
         upload_response = await client.post("/api/v1/files/upload", files=files)
         file_id = upload_response.json()["data"]["file_id"]
@@ -194,7 +231,7 @@ class TestWebSocket:
     @pytest.mark.asyncio
     async def test_websocket_status(self, client: AsyncClient):
         """Test WebSocket status endpoint."""
-        response = await client.get("/api/v1/ws/status")
+        response = await client.get("/ws/status")
         assert response.status_code == 200
         data = response.json()
         assert "active_sessions" in data

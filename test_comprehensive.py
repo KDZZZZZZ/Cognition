@@ -7,21 +7,80 @@ Tests:
 2. Viewport tracking for AI context
 3. File upload (MD, TXT, PDF)
 4. Version history tracking
-5. DeepSeek integration (if API key provided)
+5. LLM integration (if API key provided)
 """
 import requests
 import json
 import time
 import os
 from pathlib import Path
+import pytest
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("KNOWLEDGE_IDE_BASE_URL", "http://localhost:8000")
 
 
 def print_section(name):
     print("\n" + "=" * 70)
     print(f"  {name}")
     print("=" * 70)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def require_live_server():
+    try:
+        response = requests.get(f"{BASE_URL}/health", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:
+        pytest.skip(f"Live API server unavailable at {BASE_URL}: {exc}")
+
+    if data.get("status") != "healthy":
+        pytest.skip(f"Live API server is not healthy: {data}")
+
+
+def _upload_markdown_file() -> str:
+    test_doc = """# AI Project Plan
+
+## Phase 1: Foundation
+- Setup project structure
+- Configure dependencies
+- Create base components
+
+## Phase 2: Core Features
+- PDF viewer with react-pdf
+- Viewport tracking
+- DeepSeek integration
+
+## Phase 3: Polish
+- Performance optimization
+- User testing
+- Documentation
+"""
+
+    import io
+
+    blob = io.BytesIO(test_doc.encode('utf-8'))
+    files = {"file": ("ai-plan.md", blob, "text/markdown")}
+    response = requests.post(f"{BASE_URL}/api/v1/files/upload", files=files)
+
+    print(f"Status: {response.status_code}")
+    data = response.json()
+
+    assert response.status_code == 200
+    assert data["success"] is True
+    return data["data"]["file_id"]
+
+
+@pytest.fixture(scope="module")
+def file_id():
+    print_section("Fixture: Upload Shared Markdown File")
+    shared_file_id = _upload_markdown_file()
+    print(f"[OK] Shared fixture markdown uploaded: {shared_file_id}")
+    yield shared_file_id
+    try:
+        requests.delete(f"{BASE_URL}/api/v1/files/{shared_file_id}", timeout=10)
+    except requests.RequestException:
+        pass
 
 
 def test_health():
@@ -83,51 +142,16 @@ def test_upload_pdf():
     return file_id
 
 
-def test_upload_markdown():
+def test_upload_markdown(file_id):
     print_section("Test 2: Markdown File Upload")
-
-    test_doc = """# AI Project Plan
-
-## Phase 1: Foundation
-- Setup project structure
-- Configure dependencies
-- Create base components
-
-## Phase 2: Core Features
-- PDF viewer with react-pdf
-- Viewport tracking
-- DeepSeek integration
-
-## Phase 3: Polish
-- Performance optimization
-- User testing
-- Documentation
-"""
-
-    # Create file and upload
-    import io
-    blob = io.BytesIO(test_doc.encode('utf-8'))
-    files = {"file": ("ai-plan.md", blob, "text/markdown")}
-    response = requests.post(f"{BASE_URL}/api/v1/files/upload", files=files)
-
-    print(f"Status: {response.status_code}")
-    data = response.json()
-
-    assert response.status_code == 200
-    assert data["success"] is True
-
-    file_id = data["data"]["file_id"]
-    print(f"[OK] Markdown file uploaded")
+    print(f"[OK] Shared fixture markdown available")
     print(f"  - File ID: {file_id}")
-    print(f"  - Chunks: {data['data']['chunks_count']}")
 
-    # Verify content
+    # Verify content on the shared fixture file
     content_response = requests.get(f"{BASE_URL}/api/v1/files/{file_id}/content")
     content_data = content_response.json()
     assert content_data["success"] is True
     print(f"  - Content length: {len(content_data['data']['content'])} chars")
-
-    return file_id
 
 
 def test_viewport_tracking(file_id):
@@ -250,15 +274,23 @@ def test_download_file(file_id):
         print(f"[FAIL] Download failed with status {response.status_code}")
 
 
-def test_delete_file(file_id):
+def test_delete_file():
     print_section("Test 8: File Deletion")
 
-    response = requests.delete(f"{BASE_URL}/api/v1/files/{file_id}")
+    create_response = requests.post(
+        f"{BASE_URL}/api/v1/files/upload",
+        files={"file": ("delete-me.md", "# Temporary\n\nDelete me.", "text/markdown")},
+    )
+    assert create_response.status_code == 200
+    create_data = create_response.json()
+    delete_file_id = create_data["data"]["file_id"]
+
+    response = requests.delete(f"{BASE_URL}/api/v1/files/{delete_file_id}")
     assert response.status_code == 200
     print(f"[OK] File deleted")
 
     # Verify deletion
-    response = requests.get(f"{BASE_URL}/api/v1/files/{file_id}")
+    response = requests.get(f"{BASE_URL}/api/v1/files/{delete_file_id}")
     assert response.status_code == 404
     print(f"[OK] File verified as deleted")
 
@@ -282,7 +314,7 @@ def run_all_tests():
             test_viewport_tracking(pdf_file)
 
         # Test Markdown
-        md_file = test_upload_markdown()
+        md_file = _upload_markdown_file()
         created_files.append(md_file)
 
         if md_file:
@@ -315,7 +347,7 @@ def run_all_tests():
         print(f"\n[FAIL] Test failed: {e}")
     except requests.exceptions.ConnectionError:
         print("\n[FAIL] Could not connect to server.")
-        print("Start the server with: python backend/server.py")
+        print("Start the server with: uvicorn backend.main:app --reload --port 8000")
     except Exception as e:
         print(f"\n[FAIL] Unexpected error: {e}")
         import traceback

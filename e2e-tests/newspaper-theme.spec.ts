@@ -4,9 +4,7 @@ test('newspaper theme baseline', async ({ page }) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByText('Explorer')).toBeVisible();
 
-  const themeButton = page.locator('button[title="Light newspaper mode is fixed in this build"]').first();
-  await expect(themeButton).toBeVisible();
-  await expect(themeButton).toBeDisabled();
+  await expect(page.getByText('Desktop Workspace')).toBeVisible();
 
   const vars = await page.evaluate(() => {
     const styles = getComputedStyle(document.documentElement);
@@ -25,7 +23,7 @@ test('newspaper theme baseline', async ({ page }) => {
   expect(vars.selectionBg).toBe('#101010');
   expect(vars.selectionText).toBe('#f7f6f2');
 
-  const sidebar = page.locator('div.w-64').first();
+  const sidebar = page.locator('button[aria-label="Resize sidebar"]').first().locator('xpath=ancestor::div[1]');
   await expect(sidebar).toBeVisible();
   const sidebarBorderStyle = await sidebar.evaluate((el) => getComputedStyle(el).borderRightStyle);
   expect(sidebarBorderStyle).toBe('dashed');
@@ -67,7 +65,11 @@ test('newspaper theme baseline', async ({ page }) => {
   expect(hasWebkitScrollbarRule).toBeTruthy();
 
   const sessionName = `theme-session-${Date.now()}`;
-  const newSessionButton = page.locator('button[title="New Session"]').first();
+  const addAtPathButton = sidebar.locator('button[title="Add at current path"]').first();
+  await expect(addAtPathButton).toBeVisible();
+  await addAtPathButton.click();
+
+  const newSessionButton = page.getByRole('button', { name: 'New Session' }).first();
   await expect(newSessionButton).toBeVisible();
   await newSessionButton.click();
 
@@ -80,9 +82,13 @@ test('newspaper theme baseline', async ({ page }) => {
   await expect(sessionTreeItem).toBeVisible();
   await sessionTreeItem.click();
 
-  const connectionBadge = page.locator('span:has-text("Connected"), span:has-text("Offline")').first();
+  const connectionBadge = page.locator('span:has-text("Connected"), span:has-text("Connecting"), span:has-text("Reconnecting")').first();
   await expect(connectionBadge).toBeVisible({ timeout: 15000 });
 
   const connectionClass = (await connectionBadge.getAttribute('class')) || '';
-  expect(connectionClass.includes('text-green-500') || connectionClass.includes('text-red-500')).toBeTruthy();
+  expect(
+    connectionClass.includes('text-green-500') ||
+    connectionClass.includes('text-amber-600') ||
+    connectionClass.includes('text-theme-text/40')
+  ).toBeTruthy();
 });

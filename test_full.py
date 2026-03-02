@@ -5,16 +5,18 @@ Comprehensive test suite for Knowledge IDE with DeepSeek Agent System.
 Tests:
 1. File upload and parsing
 2. File content retrieval
-3. Agent tool calling (search, update, insert)
+3. Agent tool calling (unified retrieval + editor diff tools)
 4. Chat with context
 5. Version history
 """
 import requests
 import json
 import time
+import os
 from pathlib import Path
+import pytest
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("KNOWLEDGE_IDE_BASE_URL", "http://localhost:8000")
 
 
 def print_section(name):
@@ -23,20 +25,20 @@ def print_section(name):
     print("=" * 60)
 
 
-def test_health():
-    print_section("Health Check")
-    response = requests.get(f"{BASE_URL}/health")
-    print(f"Status: {response.status_code}")
-    data = response.json()
-    print(f"Response: {json.dumps(data, indent=2)}")
-    assert data["status"] == "healthy"
-    print("[OK] Server is healthy")
+@pytest.fixture(scope="module", autouse=True)
+def require_live_server():
+    try:
+        response = requests.get(f"{BASE_URL}/health", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as exc:
+        pytest.skip(f"Live API server unavailable at {BASE_URL}: {exc}")
+
+    if data.get("status") != "healthy":
+        pytest.skip(f"Live API server is not healthy: {data}")
 
 
-def test_upload_document():
-    print_section("Test 1: Upload Document")
-
-    # Create a test document
+def _upload_test_document() -> str:
     test_doc = """# Project Requirements
 
 ## Overview
@@ -67,10 +69,35 @@ Build a knowledge management system with AI capabilities.
 
     assert response.status_code == 200
     assert data["success"] is True
+    return data["data"]["file_id"]
 
-    file_id = data["data"]["file_id"]
-    print(f"[OK] File uploaded with ID: {file_id}")
-    return file_id
+
+@pytest.fixture(scope="module")
+def file_id():
+    print_section("Fixture: Upload Shared Document")
+    shared_file_id = _upload_test_document()
+    print(f"[OK] Shared fixture file uploaded: {shared_file_id}")
+    yield shared_file_id
+    try:
+        requests.delete(f"{BASE_URL}/api/v1/files/{shared_file_id}", timeout=10)
+    except requests.RequestException:
+        pass
+
+
+def test_health():
+    print_section("Health Check")
+    response = requests.get(f"{BASE_URL}/health")
+    print(f"Status: {response.status_code}")
+    data = response.json()
+    print(f"Response: {json.dumps(data, indent=2)}")
+    assert data["status"] == "healthy"
+    print("[OK] Server is healthy")
+
+
+def test_upload_document(file_id):
+    print_section("Test 1: Upload Document")
+    assert file_id
+    print(f"[OK] Shared fixture file available: {file_id}")
 
 
 def test_get_file_content(file_id):
@@ -182,9 +209,9 @@ def test_agent_tools():
     # This would test the agent's ability to call tools
     # Without a real API key, we can't test actual tool calling
     print("Agent Tools Available:")
-    print("  - search_documents: Search for content in uploaded files")
-    print("  - update_block: Update a specific block in a document")
-    print("  - insert_block: Insert new content into a document")
+    print("  - locate_relevant_segments: Unified retrieval across md/pdf/web")
+    print("  - read_document_segments: Local deep read with page/anchor filters")
+    print("  - update_file/update_block/insert_block/delete_block: Propose pending diffs")
     print("[INFO] Agent tools configured (requires DeepSeek API key for testing)")
 
 
@@ -245,18 +272,24 @@ def test_download_file(file_id):
         print("[FAIL] File download failed")
 
 
-def test_delete_file(file_id):
+def test_delete_file():
     print_section("Test 11: Delete File")
 
-    response = requests.delete(f"{BASE_URL}/api/v1/files/{file_id}")
-    print(f"Status: {response.status_code}")
-    data = response.json()
+    create_response = requests.post(
+        f"{BASE_URL}/api/v1/files/upload",
+        files={"file": ("delete-me.md", "# Temporary\n\nDelete me.", "text/markdown")},
+    )
+    assert create_response.status_code == 200
+    create_data = create_response.json()
+    delete_file_id = create_data["data"]["file_id"]
 
+    response = requests.delete(f"{BASE_URL}/api/v1/files/{delete_file_id}")
+    print(f"Status: {response.status_code}")
     assert response.status_code == 200
     print(f"[OK] File deleted")
 
     # Verify it's gone
-    response = requests.get(f"{BASE_URL}/api/v1/files/{file_id}")
+    response = requests.get(f"{BASE_URL}/api/v1/files/{delete_file_id}")
     assert response.status_code == 404
     print(f"[OK] File verified as deleted")
 
@@ -271,7 +304,7 @@ def run_all_tests():
 
     try:
         test_health()
-        file_id = test_upload_document()
+        file_id = _upload_test_document()
         test_get_file_content(file_id)
         test_get_chunks(file_id)
         test_chat_with_context(file_id)
@@ -288,14 +321,14 @@ def run_all_tests():
         print("\nNOTE: DeepSeek AI features require DEEPSEEK_API_KEY to be set.")
         print("To enable AI features, set the environment variable:")
         print("  set DEEPSEEK_API_KEY=your-key-here")
-        print("  python backend/server.py")
+        print("  uvicorn backend.main:app --reload --port 8000")
         print()
 
     except AssertionError as e:
         print(f"\n[FAIL] Test failed: {e}")
     except requests.exceptions.ConnectionError:
         print("\n[FAIL] Could not connect to server.")
-        print("Start the server with: python backend/server.py")
+        print("Start the server with: uvicorn backend.main:app --reload --port 8000")
     except Exception as e:
         print(f"\n[FAIL] Unexpected error: {e}")
     finally:
