@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "modes": {
+    "general_assistant": {
+      "workflow_ids": ["general"],
+      "template_ids": ["answer_template"],
+      "default_tool_groups": ["reader", "control"],
+      "priority": 1000
+    },
+    "paper_reading": {
+      "workflow_ids": ["general", "paper_reading"],
+      "template_ids": ["paper_template"],
+      "default_tool_groups": ["reader", "visual", "control"],
+      "priority": 900
+    },
+    "textbook_learning": {
+      "workflow_ids": ["general", "textbook_learning"],
+      "template_ids": ["textbook_template", "section_template"],
+      "default_tool_groups": ["reader", "editor", "control"],
+      "priority": 800
+    },
+    "note_edit": {
+      "workflow_ids": ["general", "note_edit"],
+      "template_ids": ["answer_template"],
+      "default_tool_groups": ["reader", "editor", "control"],
+      "priority": 700
+    },
+    "qa_support": {
+      "workflow_ids": ["general", "qa_support"],
+      "template_ids": ["answer_template"],
+      "default_tool_groups": ["reader", "visual", "control"],
+      "priority": 600
+    }
+  },
+  "workflows": {
+    "general": { "path": "workflows/general.md", "required": true, "priority": 1000 },
+    "paper_reading": { "path": "workflows/paper_reading.md", "required": false, "priority": 900 },
+    "textbook_learning": { "path": "workflows/textbook_learning.md", "required": false, "priority": 800 },
+    "note_edit": { "path": "workflows/note_edit.md", "required": false, "priority": 700 },
+    "qa_support": { "path": "workflows/qa_support.md", "required": false, "priority": 600 }
+  },
+  "templates": {
+    "answer_template": { "path": "templates/answer_template.md", "priority": 1000 },
+    "paper_template": { "path": "templates/paper_template.md", "priority": 900 },
+    "textbook_template": { "path": "templates/textbook_template.md", "priority": 800 },
+    "section_template": { "path": "templates/section_template.md", "priority": 700 }
+  }
+}

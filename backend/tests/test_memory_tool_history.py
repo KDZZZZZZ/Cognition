@@ -34,7 +34,7 @@ async def test_pause_resume_keeps_full_tool_result_in_memory_epoch(
 
     calls = {"count": 0}
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None, tool_choice=None, **kwargs):
         calls["count"] += 1
         if calls["count"] == 1:
             return {

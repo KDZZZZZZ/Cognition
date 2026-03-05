@@ -244,6 +244,27 @@ class ChatMessage(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class SessionViewport(Base):
+    __tablename__ = "session_viewports"
+
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    file_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("files.id", ondelete="CASCADE"), primary_key=True
+    )
+    file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    file_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    page: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    visible_unit: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    visible_start: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    visible_end: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    anchor_block_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    pending_diff_event_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    scroll_y: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
 class ConversationCompaction(Base):
     __tablename__ = "conversation_compactions"
 
@@ -278,4 +299,65 @@ class SessionTaskState(Base):
     artifacts_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     blocked_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     last_message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class SessionTaskRegistry(Base):
+    __tablename__ = "session_task_registries"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running", index=True)
+    active_task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    goal_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    catalog_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class SessionTask(Base):
+    __tablename__ = "session_tasks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    registry_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("session_task_registries.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("sessions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    task_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    current_step_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blocked_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    missing_inputs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    artifacts_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_message_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
+class SessionTaskStep(Base):
+    __tablename__ = "session_task_steps"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("session_tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    step_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True)
+    step_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    required_inputs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    resolved_inputs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    missing_inputs_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    output_markdown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    output_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    citations_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    compact_anchor_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)

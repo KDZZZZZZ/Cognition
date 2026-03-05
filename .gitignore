@@ -43,3 +43,5 @@ nul
 .env
 .env.local
 .env.*.local
+# E2E local fixtures
+e2e-tests/local-fixtures/

@@ -112,7 +112,17 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   }, []);
 
   // Handle viewport changes for AI context
-  const handleViewportChange = useCallback(async (scrollTop: number, scrollHeight: number, page?: number) => {
+  const handleViewportChange = useCallback(async (
+    scrollTop: number,
+    scrollHeight: number,
+    page?: number,
+    options?: {
+      visibleUnit?: 'page' | 'line' | 'paragraph' | 'pixel';
+      visibleStart?: number;
+      visibleEnd?: number;
+      anchorBlockId?: string;
+    }
+  ) => {
     if (activeTab && activeTab.type !== 'session') {
       try {
         await api.updateViewport(
@@ -120,13 +130,20 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
           activeTab.id,
           page || currentPage,
           scrollTop,
-          scrollHeight
+          scrollHeight,
+          {
+            visibleUnit: options?.visibleUnit,
+            visibleStart: options?.visibleStart,
+            visibleEnd: options?.visibleEnd,
+            anchorBlockId: options?.anchorBlockId,
+            pendingDiffEventId: pendingDiffEvent?.id,
+          }
         );
       } catch (err) {
         console.error('Failed to update viewport:', err);
       }
     }
-  }, [activeTab, sessionId, currentPage]);
+  }, [activeTab, sessionId, currentPage, pendingDiffEvent?.id]);
 
   useEffect(() => {
     if (isActive && activeTab?.type === 'session') {
@@ -787,6 +804,13 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                   [activeTab.id],
                   { activeFileId: activeTab.id, compactMode: 'force' }
                 );
+              }}
+              onViewportChange={({ scrollTop, scrollHeight, visibleUnit, visibleStart, visibleEnd }) => {
+                void handleViewportChange(scrollTop, scrollHeight, currentPage, {
+                  visibleUnit,
+                  visibleStart,
+                  visibleEnd,
+                });
               }}
             />
           )

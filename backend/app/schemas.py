@@ -75,6 +75,11 @@ class ViewportUpdateRequest(BaseModel):
     scroll_y: float = 0
     visible_range_start: int = 0
     visible_range_end: int = 0
+    visible_unit: Optional[Literal["page", "line", "paragraph", "pixel"]] = None
+    visible_start: Optional[int] = None
+    visible_end: Optional[int] = None
+    anchor_block_id: Optional[str] = None
+    pending_diff_event_id: Optional[str] = None
 
 
 class ChatMessage(BaseModel):
@@ -90,6 +95,10 @@ class ChatRequest(BaseModel):
     viewport_context: Optional[str] = None
     active_file_id: Optional[str] = None
     active_page: Optional[int] = None
+    active_visible_unit: Optional[Literal["page", "line", "paragraph", "pixel"]] = None
+    active_visible_start: Optional[int] = None
+    active_visible_end: Optional[int] = None
+    active_anchor_block_id: Optional[str] = None
     compact_mode: Optional[Literal["auto", "off", "force"]] = "auto"
     task_id: Optional[str] = None
     model: Optional[str] = None
@@ -217,3 +226,34 @@ class SessionInfo(BaseModel):
     created_at: datetime
     permissions: Dict[str, str]  # {"file_id": "read"|"write"|"none"}
     name: Optional[str] = None
+
+
+class TaskRegistryStepSnapshot(BaseModel):
+    index: int
+    type: str
+    status: str
+    missing_inputs: list[dict[str, Any]] = Field(default_factory=list)
+    compact_anchor: Optional[dict[str, Any]] = None
+
+
+class TaskRegistryTaskSnapshot(BaseModel):
+    task_id: str
+    goal: str
+    status: str
+    task_order: int
+    current_step_index: int
+    total_steps: int
+    blocked_reason: Optional[str] = None
+    missing_inputs: list[dict[str, Any]] = Field(default_factory=list)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
+    steps: list[TaskRegistryStepSnapshot] = Field(default_factory=list)
+
+
+class TaskRegistrySnapshot(BaseModel):
+    registry_id: str
+    session_id: str
+    status: str
+    active_task_id: Optional[str] = None
+    goal_summary: Optional[str] = None
+    catalog_version: int = 1
+    tasks: list[TaskRegistryTaskSnapshot] = Field(default_factory=list)

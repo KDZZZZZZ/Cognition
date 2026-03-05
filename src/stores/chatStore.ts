@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api } from '../api/client';
-import type { ChatMessage, TaskEventPayload, TaskStatus, TaskPromptPayload } from '../api/client';
+import type {
+  ChatMessage,
+  TaskEventPayload,
+  TaskRegistryPayload,
+  TaskRegistryTaskPayload,
+  TaskStatus,
+  TaskPromptPayload,
+} from '../api/client';
 import { useSessionStore } from './sessionStore';
 
 const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'kimi-latest';
@@ -49,9 +56,28 @@ export interface TaskBoardItem {
   updatedAt: string;
 }
 
+type ChatResponseData = {
+  message_id: string;
+  content: string;
+  timestamp: string;
+  tool_calls?: any[];
+  tool_results?: any;
+  citations?: any[];
+  task_id?: string;
+  paused?: boolean;
+  cancelled?: boolean;
+  failed?: boolean;
+  awaiting_user_input?: unknown;
+  task_registry?: unknown;
+};
+
 interface SendMessageOptions {
   activeFileId?: string;
   activePage?: number;
+  activeVisibleUnit?: 'page' | 'line' | 'paragraph' | 'pixel';
+  activeVisibleStart?: number;
+  activeVisibleEnd?: number;
+  activeAnchorBlockId?: string;
   compactMode?: 'auto' | 'off' | 'force';
 }
 
@@ -62,6 +88,7 @@ interface ChatState {
   loadingSessions: Record<string, boolean>;
   activeTasks: Record<string, ActiveTaskState | null>;
   pendingPrompts: Record<string, PendingPromptState | null>;
+  taskRegistries: Record<string, TaskRegistryPayload | null>;
   taskBoards: Record<string, TaskBoardItem[]>;
   lastTaskInput: Record<string, TaskInputSnapshot | null>;
   abortControllers: Record<string, AbortController | null>;
@@ -83,6 +110,7 @@ interface ChatState {
   retryLastTask: (sessionId: string) => Promise<void>;
   isSessionLoading: (sessionId: string) => boolean;
   getActiveTask: (sessionId: string) => ActiveTaskState | null;
+  getTaskRegistry: (sessionId: string) => TaskRegistryPayload | null;
   getTaskBoard: (sessionId: string) => TaskBoardItem[];
   getPendingPrompt: (sessionId: string) => PendingPromptState | null;
   answerTaskPrompt: (
@@ -297,7 +325,126 @@ function derivePendingPromptFromMessages(messages: ChatMessage[]): PendingPrompt
   return pending;
 }
 
-function pickLatestViewport(viewports: unknown): { file_id?: string; page?: number } | null {
+function normalizeTaskRegistryStep(raw: unknown): TaskRegistryTaskPayload['steps'][number] | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const step = raw as Record<string, unknown>;
+  if (typeof step.index !== 'number' || typeof step.type !== 'string' || typeof step.status !== 'string') {
+    return null;
+  }
+  return {
+    index: step.index,
+    type: step.type,
+    status: step.status,
+    missing_inputs: Array.isArray(step.missing_inputs)
+      ? (step.missing_inputs as Array<Record<string, any>>)
+      : undefined,
+    output_preview: typeof step.output_preview === 'string' ? step.output_preview : undefined,
+    compact_anchor: step.compact_anchor && typeof step.compact_anchor === 'object'
+      ? (step.compact_anchor as Record<string, any>)
+      : null,
+  };
+}
+
+function normalizeTaskRegistryTask(raw: unknown): TaskRegistryTaskPayload | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const task = raw as Record<string, unknown>;
+  const taskId = typeof task.task_id === 'string' ? task.task_id : '';
+  const goal = typeof task.goal === 'string' ? task.goal : '';
+  const status = typeof task.status === 'string' ? task.status : '';
+  const taskOrder = typeof task.task_order === 'number' ? task.task_order : 0;
+  const currentStepIndex = typeof task.current_step_index === 'number' ? task.current_step_index : 0;
+  const totalSteps = typeof task.total_steps === 'number' ? task.total_steps : 0;
+  if (!taskId || !goal || !status) return null;
+  const steps = Array.isArray(task.steps)
+    ? task.steps.map(normalizeTaskRegistryStep).filter((item): item is NonNullable<typeof item> => Boolean(item))
+    : [];
+  return {
+    task_id: taskId,
+    goal,
+    status,
+    task_order: taskOrder,
+    current_step_index: currentStepIndex,
+    total_steps: totalSteps,
+    blocked_reason: typeof task.blocked_reason === 'string' ? task.blocked_reason : null,
+    missing_inputs: Array.isArray(task.missing_inputs)
+      ? (task.missing_inputs as Array<Record<string, any>>)
+      : [],
+    artifacts: task.artifacts && typeof task.artifacts === 'object'
+      ? (task.artifacts as Record<string, any>)
+      : {},
+    steps,
+  };
+}
+
+function normalizeTaskRegistry(raw: unknown): TaskRegistryPayload | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const registry = raw as Record<string, unknown>;
+  const registryId = typeof registry.registry_id === 'string' ? registry.registry_id : '';
+  const sessionId = typeof registry.session_id === 'string' ? registry.session_id : '';
+  const status = typeof registry.status === 'string' ? registry.status : '';
+  const catalogVersion = typeof registry.catalog_version === 'number' ? registry.catalog_version : 0;
+  if (!registryId || !sessionId || !status) return null;
+  const tasks = Array.isArray(registry.tasks)
+    ? registry.tasks.map(normalizeTaskRegistryTask).filter((item): item is NonNullable<typeof item> => Boolean(item))
+    : [];
+  return {
+    registry_id: registryId,
+    session_id: sessionId,
+    status,
+    active_task_id: typeof registry.active_task_id === 'string' ? registry.active_task_id : null,
+    goal_summary: typeof registry.goal_summary === 'string' ? registry.goal_summary : null,
+    catalog_version: catalogVersion,
+    tasks,
+  };
+}
+
+function deriveTaskRegistryFromMessages(messages: ChatMessage[]): TaskRegistryPayload | null {
+  const taskEvents = messages
+    .filter((message) => message.role === 'task_event')
+    .map((message) => {
+      const payload = (message.tool_results as any)?.task_event;
+      return payload && typeof payload === 'object' ? (payload as TaskEventPayload) : null;
+    })
+    .filter((event): event is TaskEventPayload => Boolean(event))
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  for (let index = taskEvents.length - 1; index >= 0; index -= 1) {
+    const registry = normalizeTaskRegistry((taskEvents[index].payload as any)?.task_registry);
+    if (registry) return registry;
+  }
+  return null;
+}
+
+function deriveTaskBoardFromRegistry(registry: TaskRegistryPayload | null): TaskBoardItem[] {
+  if (!registry) return [];
+  const now = new Date().toISOString();
+  return [...registry.tasks]
+    .sort((a, b) => a.task_order - b.task_order)
+    .map((task) => ({
+      id: task.task_id,
+      name: task.goal,
+      status: task.status === 'completed' ? 'completed' : task.status === 'running' ? 'running' : 'waiting',
+      description: task.steps
+        .map((step) => `[${step.status}] ${step.type}`)
+        .join(' · '),
+      completionSummary: task.steps
+        .filter((step) => step.status === 'completed' && step.output_preview)
+        .map((step) => step.output_preview)
+        .filter(Boolean)
+        .join('\n\n') || undefined,
+      createdAt: now,
+      updatedAt: now,
+    }));
+}
+
+function pickLatestViewport(viewports: unknown): {
+  file_id?: string;
+  page?: number;
+  visible_unit?: 'page' | 'line' | 'paragraph' | 'pixel';
+  visible_start?: number;
+  visible_end?: number;
+  anchor_block_id?: string;
+} | null {
   if (!Array.isArray(viewports) || viewports.length === 0) {
     return null;
   }
@@ -317,6 +464,10 @@ function pickLatestViewport(viewports: unknown): { file_id?: string; page?: numb
   return {
     file_id: typeof latest.file_id === 'string' ? latest.file_id : undefined,
     page: typeof latest.page === 'number' ? latest.page : undefined,
+    visible_unit: typeof latest.visible_unit === 'string' ? latest.visible_unit as any : undefined,
+    visible_start: typeof latest.visible_start === 'number' ? latest.visible_start : undefined,
+    visible_end: typeof latest.visible_end === 'number' ? latest.visible_end : undefined,
+    anchor_block_id: typeof latest.anchor_block_id === 'string' ? latest.anchor_block_id : undefined,
   };
 }
 
@@ -338,6 +489,43 @@ function buildReferencePreamble(references: SessionReferenceItem[]): string {
   ].join('\n\n');
 }
 
+function registryToActiveTask(
+  registry: TaskRegistryPayload | null,
+  fallback: ActiveTaskState | null,
+  overrides?: Partial<ActiveTaskState>
+): ActiveTaskState | null {
+  if (!registry) {
+    return fallback ? { ...fallback, ...overrides } : null;
+  }
+  const activeTask = registry.tasks.find((task) => task.task_id === registry.active_task_id)
+    || registry.tasks.find((task) => task.status === 'running' || task.status === 'blocked')
+    || registry.tasks[0];
+  const activeStep = activeTask?.steps.find((step) => step.status === 'running' || step.status === 'blocked')
+    || activeTask?.steps[activeTask?.current_step_index || 0];
+  const progress = activeTask && activeTask.total_steps > 0
+    ? Math.round((Math.min(activeTask.current_step_index, activeTask.total_steps) / activeTask.total_steps) * 100)
+    : fallback?.progress ?? 0;
+  return {
+    taskId: registry.registry_id,
+    status: registry.status === 'blocked'
+      ? 'paused'
+      : registry.status === 'completed'
+        ? 'completed'
+        : registry.status === 'cancelled'
+          ? 'cancelled'
+          : fallback?.status || 'running',
+    stage: activeStep?.status === 'blocked' ? 'blocked' : activeStep?.type || fallback?.stage || 'executing',
+    progress,
+    startedAt: fallback?.startedAt || new Date().toISOString(),
+    updatedAt: overrides?.updatedAt || new Date().toISOString(),
+    lastMessage: activeTask
+      ? `${activeTask.goal}${activeStep ? ` · ${activeStep.type}` : ''}`
+      : fallback?.lastMessage || '',
+    contextFiles: fallback?.contextFiles || [],
+    ...overrides,
+  };
+}
+
 const sessionMessageLoadTokens: Record<string, number> = {};
 
 export const useChatStore = create<ChatState>()(
@@ -349,6 +537,7 @@ export const useChatStore = create<ChatState>()(
       loadingSessions: {},
       activeTasks: {},
       pendingPrompts: {},
+      taskRegistries: {},
       taskBoards: {},
       lastTaskInput: {},
       abortControllers: {},
@@ -371,6 +560,7 @@ export const useChatStore = create<ChatState>()(
       isSessionLoading: (sessionId: string) => !!get().loadingSessions[sessionId],
 
       getActiveTask: (sessionId: string) => get().activeTasks[sessionId] || null,
+      getTaskRegistry: (sessionId: string) => get().taskRegistries[sessionId] || null,
       getTaskBoard: (sessionId: string) => get().taskBoards[sessionId] || [],
       getPendingPrompt: (sessionId: string) => get().pendingPrompts[sessionId] || null,
 
@@ -472,6 +662,10 @@ export const useChatStore = create<ChatState>()(
           const sessionPermissions = useSessionStore.getState().getSessionPermissions(sessionId);
           let activeFileId = options.activeFileId;
           let activePage = options.activePage;
+          let activeVisibleUnit = options.activeVisibleUnit;
+          let activeVisibleStart = options.activeVisibleStart;
+          let activeVisibleEnd = options.activeVisibleEnd;
+          let activeAnchorBlockId = options.activeAnchorBlockId;
 
           if (!activeFileId || typeof activePage !== 'number') {
             try {
@@ -483,6 +677,14 @@ export const useChatStore = create<ChatState>()(
                   if (typeof activePage !== 'number' && typeof latest.page === 'number') {
                     activePage = latest.page;
                   }
+                  activeVisibleUnit = activeVisibleUnit || latest.visible_unit;
+                  if (typeof activeVisibleStart !== 'number' && typeof latest.visible_start === 'number') {
+                    activeVisibleStart = latest.visible_start;
+                  }
+                  if (typeof activeVisibleEnd !== 'number' && typeof latest.visible_end === 'number') {
+                    activeVisibleEnd = latest.visible_end;
+                  }
+                  activeAnchorBlockId = activeAnchorBlockId || latest.anchor_block_id;
                 }
               }
             } catch {
@@ -502,23 +704,29 @@ export const useChatStore = create<ChatState>()(
               signal: abortController.signal,
               activeFileId,
               activePage,
+              activeVisibleUnit,
+              activeVisibleStart,
+              activeVisibleEnd,
+              activeAnchorBlockId,
               compactMode: options.compactMode || 'auto',
             }
           );
 
           if (response.success && response.data) {
-            const isCancelled = Boolean(response.data.cancelled);
-            const isFailed = Boolean(response.data.failed);
-            const isPaused = Boolean(response.data.paused);
-            const pausedPrompt = normalizeTaskPrompt(response.data.awaiting_user_input);
+            const responseData = response.data as ChatResponseData;
+            const isCancelled = Boolean(responseData.cancelled);
+            const isFailed = Boolean(responseData.failed);
+            const isPaused = Boolean(responseData.paused);
+            const pausedPrompt = normalizeTaskPrompt(responseData.awaiting_user_input);
+            const taskRegistry = normalizeTaskRegistry(responseData.task_registry);
             const assistantMessage: ChatMessage = {
-              id: response.data.message_id,
+              id: responseData.message_id,
               role: 'assistant',
-              content: response.data.content,
-              timestamp: response.data.timestamp,
-              tool_calls: response.data.tool_calls,
-              tool_results: response.data.tool_results,
-              citations: response.data.citations,
+              content: responseData.content,
+              timestamp: responseData.timestamp,
+              tool_calls: responseData.tool_calls,
+              tool_results: responseData.tool_results,
+              citations: responseData.citations,
             };
 
             set((state) => {
@@ -540,15 +748,30 @@ export const useChatStore = create<ChatState>()(
                 loading: computeGlobalLoading(loadingSessions),
                 activeTasks: {
                   ...state.activeTasks,
-                  [sessionId]: existing
+                  [sessionId]: registryToActiveTask(taskRegistry, existing, taskRegistry
                     ? {
-                        ...existing,
-                        status: isPaused ? 'paused' : isCancelled ? 'cancelled' : isFailed ? 'failed' : 'completed',
-                        stage: isPaused ? 'blocked' : isCancelled || isFailed ? 'blocked' : 'done',
-                        progress: isPaused ? existing.progress : 100,
+                        status: isPaused ? 'paused' : isCancelled ? 'cancelled' : isFailed ? 'failed' : taskRegistry.status === 'completed' ? 'completed' : 'running',
                         updatedAt: new Date().toISOString(),
                       }
-                    : null,
+                    : (existing
+                      ? {
+                          ...existing,
+                          status: isPaused ? 'paused' : isCancelled ? 'cancelled' : isFailed ? 'failed' : 'completed',
+                          stage: isPaused ? 'blocked' : isCancelled || isFailed ? 'blocked' : 'done',
+                          progress: isPaused ? existing.progress : 100,
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : null) || undefined),
+                },
+                taskRegistries: {
+                  ...state.taskRegistries,
+                  [sessionId]: taskRegistry,
+                },
+                taskBoards: {
+                  ...state.taskBoards,
+                  [sessionId]: taskRegistry
+                    ? deriveTaskBoardFromRegistry(taskRegistry)
+                    : state.taskBoards[sessionId] || [],
                 },
                 pendingPrompts: {
                   ...state.pendingPrompts,
@@ -556,7 +779,7 @@ export const useChatStore = create<ChatState>()(
                     ? {
                         taskId,
                         prompt: pausedPrompt,
-                        requestedAt: response.data.timestamp || new Date().toISOString(),
+                        requestedAt: responseData.timestamp || new Date().toISOString(),
                       }
                     : null,
                 },
@@ -642,6 +865,7 @@ export const useChatStore = create<ChatState>()(
         set((state) => {
           const currentMessages = state.messages[sessionId] || [];
           const duplicated = currentMessages.some((msg) => msg.id === event.event_id);
+          const taskRegistry = normalizeTaskRegistry((event.payload as any)?.task_registry);
           const messages = duplicated
             ? state.messages
             : {
@@ -702,11 +926,22 @@ export const useChatStore = create<ChatState>()(
             loading: computeGlobalLoading(loadingSessions),
             activeTasks: {
               ...state.activeTasks,
-              [sessionId]: nextTask,
+              [sessionId]: taskRegistry
+                ? registryToActiveTask(taskRegistry, nextTask, {
+                    status: event.status,
+                    updatedAt: event.timestamp,
+                  })
+                : nextTask,
+            },
+            taskRegistries: {
+              ...state.taskRegistries,
+              [sessionId]: taskRegistry ?? state.taskRegistries[sessionId] ?? null,
             },
             taskBoards: {
               ...state.taskBoards,
-              [sessionId]: applyTaskEventToBoard(state.taskBoards[sessionId] || [], event),
+              [sessionId]: taskRegistry
+                ? deriveTaskBoardFromRegistry(taskRegistry)
+                : applyTaskEventToBoard(state.taskBoards[sessionId] || [], event),
             },
             pendingPrompts: {
               ...state.pendingPrompts,
@@ -849,18 +1084,20 @@ export const useChatStore = create<ChatState>()(
           });
 
           if (response.success && response.data) {
-            const isCancelled = Boolean(response.data.cancelled);
-            const isFailed = Boolean(response.data.failed);
-            const isPaused = Boolean(response.data.paused);
-            const pausedPrompt = normalizeTaskPrompt(response.data.awaiting_user_input);
+            const responseData = response.data as ChatResponseData;
+            const isCancelled = Boolean(responseData.cancelled);
+            const isFailed = Boolean(responseData.failed);
+            const isPaused = Boolean(responseData.paused);
+            const pausedPrompt = normalizeTaskPrompt(responseData.awaiting_user_input);
+            const taskRegistry = normalizeTaskRegistry(responseData.task_registry);
             const assistantMessage: ChatMessage = {
-              id: response.data.message_id,
+              id: responseData.message_id,
               role: 'assistant',
-              content: response.data.content,
-              timestamp: response.data.timestamp,
-              tool_calls: response.data.tool_calls,
-              tool_results: response.data.tool_results,
-              citations: response.data.citations,
+              content: responseData.content,
+              timestamp: responseData.timestamp,
+              tool_calls: responseData.tool_calls,
+              tool_results: responseData.tool_results,
+              citations: responseData.citations,
             };
 
             set((state) => {
@@ -873,7 +1110,7 @@ export const useChatStore = create<ChatState>()(
                 ? (state.messages[sessionId] || [])
                 : [...(state.messages[sessionId] || []), assistantMessage];
               return {
-                error: isFailed ? response.data.content || 'Task failed' : null,
+                error: isFailed ? responseData.content || 'Task failed' : null,
                 messages: {
                   ...state.messages,
                   [sessionId]: nextMessages,
@@ -882,15 +1119,30 @@ export const useChatStore = create<ChatState>()(
                 loading: computeGlobalLoading(loadingSessions),
                 activeTasks: {
                   ...state.activeTasks,
-                  [sessionId]: existing
+                  [sessionId]: registryToActiveTask(taskRegistry, existing, taskRegistry
                     ? {
-                        ...existing,
-                        status: isPaused ? 'paused' : isCancelled ? 'cancelled' : isFailed ? 'failed' : 'completed',
-                        stage: isPaused ? 'blocked' : isCancelled || isFailed ? 'blocked' : 'done',
-                        progress: isPaused ? existing.progress : 100,
+                        status: isPaused ? 'paused' : isCancelled ? 'cancelled' : isFailed ? 'failed' : taskRegistry.status === 'completed' ? 'completed' : 'running',
                         updatedAt: new Date().toISOString(),
                       }
-                    : null,
+                    : (existing
+                      ? {
+                          ...existing,
+                          status: isPaused ? 'paused' : isCancelled ? 'cancelled' : isFailed ? 'failed' : 'completed',
+                          stage: isPaused ? 'blocked' : isCancelled || isFailed ? 'blocked' : 'done',
+                          progress: isPaused ? existing.progress : 100,
+                          updatedAt: new Date().toISOString(),
+                        }
+                      : null) || undefined),
+                },
+                taskRegistries: {
+                  ...state.taskRegistries,
+                  [sessionId]: taskRegistry,
+                },
+                taskBoards: {
+                  ...state.taskBoards,
+                  [sessionId]: taskRegistry
+                    ? deriveTaskBoardFromRegistry(taskRegistry)
+                    : state.taskBoards[sessionId] || [],
                 },
                 pendingPrompts: {
                   ...state.pendingPrompts,
@@ -898,7 +1150,7 @@ export const useChatStore = create<ChatState>()(
                     ? {
                         taskId,
                         prompt: pausedPrompt,
-                        requestedAt: response.data.timestamp || new Date().toISOString(),
+                        requestedAt: responseData.timestamp || new Date().toISOString(),
                       }
                     : null,
                 },
@@ -967,6 +1219,10 @@ export const useChatStore = create<ChatState>()(
             ...state.activeTasks,
             [sessionId]: null,
           },
+          taskRegistries: {
+            ...state.taskRegistries,
+            [sessionId]: null,
+          },
           taskBoards: {
             ...state.taskBoards,
             [sessionId]: [],
@@ -989,6 +1245,7 @@ export const useChatStore = create<ChatState>()(
           const { [sessionId]: _______, ...restReferences } = state.sessionReferences;
           const { [sessionId]: __, ...restLoading } = state.loadingSessions;
           const { [sessionId]: ___, ...restTasks } = state.activeTasks;
+          const { [sessionId]: _____registry, ...restRegistries } = state.taskRegistries;
           const { [sessionId]: ____, ...restBoards } = state.taskBoards;
           const { [sessionId]: _____pending, ...restPending } = state.pendingPrompts;
           const { [sessionId]: _____, ...restInputs } = state.lastTaskInput;
@@ -999,6 +1256,7 @@ export const useChatStore = create<ChatState>()(
             loadingSessions: restLoading,
             loading: computeGlobalLoading(restLoading),
             activeTasks: restTasks,
+            taskRegistries: restRegistries,
             taskBoards: restBoards,
             pendingPrompts: restPending,
             lastTaskInput: restInputs,
@@ -1064,6 +1322,7 @@ export const useChatStore = create<ChatState>()(
           if (response.success && response.data) {
             const messages = response.data.messages;
             if (messages) {
+              const taskRegistry = deriveTaskRegistryFromMessages(messages);
               set((state) => {
                 if (sessionMessageLoadTokens[sessionId] !== requestToken) {
                   return state;
@@ -1073,9 +1332,15 @@ export const useChatStore = create<ChatState>()(
                     ...state.messages,
                     [sessionId]: messages,
                   },
+                  taskRegistries: {
+                    ...state.taskRegistries,
+                    [sessionId]: taskRegistry,
+                  },
                   taskBoards: {
                     ...state.taskBoards,
-                    [sessionId]: deriveTaskBoardFromMessages(messages),
+                    [sessionId]: taskRegistry
+                      ? deriveTaskBoardFromRegistry(taskRegistry)
+                      : deriveTaskBoardFromMessages(messages),
                   },
                   pendingPrompts: {
                     ...state.pendingPrompts,
@@ -1099,6 +1364,7 @@ export const useChatStore = create<ChatState>()(
         sessionId: state.sessionId,
         model: state.model,
         activeTasks: state.activeTasks,
+        taskRegistries: state.taskRegistries,
         taskBoards: state.taskBoards,
         pendingPrompts: state.pendingPrompts,
         lastTaskInput: state.lastTaskInput,

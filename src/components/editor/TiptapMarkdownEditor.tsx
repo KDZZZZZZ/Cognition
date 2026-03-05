@@ -41,6 +41,13 @@ export interface TiptapMarkdownEditorProps {
     sourceFileId: string;
     sourceFileName: string;
   }) => Promise<void> | void;
+  onViewportChange?: (payload: {
+    scrollTop: number;
+    scrollHeight: number;
+    visibleUnit: 'line';
+    visibleStart: number;
+    visibleEnd: number;
+  }) => void;
 }
 
 export interface TiptapMarkdownEditorRef {
@@ -81,10 +88,12 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       sourceFile,
       onAddReferenceToSession,
       onRunSelectionAction,
+      onViewportChange,
     },
     ref
   ) => {
     const localEchoFingerprintsRef = useRef<string[]>([]);
+    const wrapperRef = useRef<HTMLDivElement | null>(null);
     const [contextMenu, setContextMenu] = useState<{
       x: number;
       y: number;
@@ -344,6 +353,38 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
     }, [editor, content, isKnownLocalEcho]);
 
     useEffect(() => {
+      if (!editor || !wrapperRef.current || !onViewportChange) return;
+
+      const wrapper = wrapperRef.current;
+      const emitViewport = () => {
+        const scrollTop = wrapper.scrollTop || 0;
+        const scrollHeight = Math.max(wrapper.scrollHeight, wrapper.clientHeight, 1);
+        const totalLines = Math.max(1, getMarkdown(editor).split('\n').length);
+        const maxScrollable = Math.max(1, scrollHeight - wrapper.clientHeight);
+        const startRatio = Math.max(0, Math.min(1, scrollTop / maxScrollable));
+        const visibleRatio = Math.max(0.02, Math.min(1, wrapper.clientHeight / scrollHeight));
+        const estimatedStart = Math.max(1, Math.floor(startRatio * totalLines));
+        const estimatedSpan = Math.max(1, Math.ceil(visibleRatio * totalLines));
+        const estimatedEnd = Math.min(totalLines, estimatedStart + estimatedSpan);
+        onViewportChange({
+          scrollTop,
+          scrollHeight,
+          visibleUnit: 'line',
+          visibleStart: estimatedStart,
+          visibleEnd: estimatedEnd,
+        });
+      };
+
+      emitViewport();
+      wrapper.addEventListener('scroll', emitViewport, { passive: true });
+      window.addEventListener('resize', emitViewport);
+      return () => {
+        wrapper.removeEventListener('scroll', emitViewport);
+        window.removeEventListener('resize', emitViewport);
+      };
+    }, [editor, onViewportChange, content]);
+
+    useEffect(() => {
       if (!contextMenu) return;
 
       const close = () => setContextMenu(null);
@@ -482,7 +523,7 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
     }
 
     return (
-      <div className="tiptap-markdown-wrapper relative">
+      <div ref={wrapperRef} className="tiptap-markdown-wrapper relative">
         <EditorContent editor={editor} />
 
         {contextMenu && (

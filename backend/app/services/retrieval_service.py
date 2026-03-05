@@ -1,11 +1,12 @@
 import asyncio
+import inspect
 import re
+from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.viewport import get_viewport_context
 from app.config import settings
 from app.models import DocumentChunk, File as FileModel
 from app.services.llm_service import llm_service
@@ -13,7 +14,13 @@ from app.services.multiformat_document_service import reader_orchestrator
 from app.services.tools.base import PermissionLevel
 from app.services.token_budget_service import estimate_tokens, short_text
 from app.services.vector_store import vector_store
+from app.services.viewport_memory_service import build_viewport_memory, normalize_active_viewport
 from app.services.visual_retrieval_service import visual_retrieval_service
+
+try:
+    from langdetect import detect as _langdetect_detect
+except Exception:  # pragma: no cover - optional runtime dependency
+    _langdetect_detect = None
 
 
 def _to_text(value: Any) -> str:
@@ -26,6 +33,138 @@ def _to_text(value: Any) -> str:
 
 def _tokenize_lexical(text: str) -> List[str]:
     return [token for token in re.split(r"\W+", text.lower()) if token]
+
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_ZH_EN_QUERY_HINT_MAP = {
+    "论文": "paper",
+    "方法": "method",
+    "实验": "experiment",
+    "结果": "results",
+    "图": "figure",
+    "表": "table",
+    "结论": "conclusion",
+    "推导": "derivation",
+    "证明": "proof",
+    "定理": "theorem",
+    "定义": "definition",
+    "损失": "loss",
+    "模型": "model",
+    "数据集": "dataset",
+    "基线": "baseline",
+    "对比": "comparison",
+}
+_EN_ZH_QUERY_HINT_MAP = {
+    "paper": "论文",
+    "method": "方法",
+    "experiment": "实验",
+    "results": "结果",
+    "figure": "图",
+    "table": "表",
+    "conclusion": "结论",
+    "proof": "证明",
+    "theorem": "定理",
+    "definition": "定义",
+    "loss": "损失",
+    "model": "模型",
+    "dataset": "数据集",
+    "baseline": "基线",
+    "comparison": "对比",
+}
+
+
+def detect_query_language(query: str) -> str:
+    text = str(query or "").strip()
+    if not text:
+        return "unknown"
+    if _CJK_RE.search(text):
+        return "zh"
+    if _langdetect_detect:
+        try:
+            detected = str(_langdetect_detect(text) or "").lower().strip()
+            if detected.startswith("zh"):
+                return "zh"
+            if detected.startswith("en"):
+                return "en"
+        except Exception:
+            pass
+    return "en"
+
+
+def _rewrite_query_by_dictionary(query: str, *, source_lang: str) -> str:
+    text = str(query or "").strip()
+    if not text:
+        return ""
+    mapping = _ZH_EN_QUERY_HINT_MAP if source_lang == "zh" else _EN_ZH_QUERY_HINT_MAP
+    enriched_tokens: List[str] = []
+    lowered = text.lower()
+    for token, translated in mapping.items():
+        if token in text or token in lowered:
+            enriched_tokens.append(translated)
+    if not enriched_tokens:
+        return ""
+    deduped = []
+    seen = set()
+    for token in enriched_tokens:
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(token)
+    return " ".join(deduped)
+
+
+def _keyword_query(query: str) -> str:
+    tokens = _tokenize_lexical(query)
+    out: List[str] = []
+    seen = set()
+    for token in tokens:
+        if len(token) < 2 or token.isdigit():
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= 12:
+            break
+    return " ".join(out)
+
+
+def build_query_bundle(query: str) -> List[Dict[str, Any]]:
+    text = str(query or "").strip()
+    if not text:
+        return []
+
+    language = detect_query_language(text)
+    bundle: List[Dict[str, Any]] = [
+        {"text": text, "lang": language, "weight": 1.0, "source": "original"},
+    ]
+
+    if settings.RAG_BILINGUAL_PARALLEL_ENABLED:
+        rewritten = _rewrite_query_by_dictionary(text, source_lang=language)
+        if rewritten and rewritten.lower() != text.lower():
+            bundle.append(
+                {
+                    "text": rewritten,
+                    "lang": "en" if language == "zh" else "zh",
+                    "weight": 0.72,
+                    "source": "rewrite",
+                }
+            )
+
+    keyword_text = _keyword_query(text)
+    if keyword_text and keyword_text.lower() != text.lower():
+        bundle.append({"text": keyword_text, "lang": language, "weight": 0.45, "source": "rewrite"})
+
+    normalized: List[Dict[str, Any]] = []
+    seen_text = set()
+    for item in bundle:
+        key = str(item.get("text") or "").strip().lower()
+        if not key or key in seen_text:
+            continue
+        seen_text.add(key)
+        normalized.append(item)
+    return normalized
 
 
 def _lexical_score(query_tokens: List[str], content: str) -> float:
@@ -135,74 +274,95 @@ async def load_active_viewport_and_excerpt(
     context_permissions: Dict[str, PermissionLevel],
     active_file_id: Optional[str],
     active_page: Optional[int],
+    active_visible_unit: Optional[str] = None,
+    active_visible_start: Optional[int] = None,
+    active_visible_end: Optional[int] = None,
+    active_anchor_block_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    viewport_ctx = (
-        get_viewport_context(session_id, file_id=active_file_id)
-        if active_file_id
-        else get_viewport_context(session_id)
+    viewport_hint = get_viewport_context(session_id, active_file_id)
+    if inspect.isawaitable(viewport_hint):
+        viewport_hint = await viewport_hint
+
+    viewport_ctx = await normalize_active_viewport(
+        db=db,
+        session_id=session_id,
+        active_file_id=active_file_id,
+        active_page=active_page,
+        active_visible_unit=active_visible_unit,
+        active_visible_start=active_visible_start,
+        active_visible_end=active_visible_end,
+        active_anchor_block_id=active_anchor_block_id,
     )
-
-    if active_file_id and active_page is not None:
-        viewport_ctx = {
-            **(viewport_ctx or {}),
-            "file_id": active_file_id,
-            "page": active_page,
-        }
-
+    if not viewport_ctx and isinstance(viewport_hint, dict):
+        viewport_ctx = dict(viewport_hint)
     if not viewport_ctx:
         return {"viewport": None, "excerpt": None}
 
-    file_id = viewport_ctx.get("file_id")
-    page = int(viewport_ctx.get("page") or 1)
-    if not file_id:
-        return {"viewport": viewport_ctx, "excerpt": None}
+    effective_file_id = str(viewport_ctx.get("file_id") or active_file_id or "").strip() or None
+    effective_page = active_page
+    if effective_page is None:
+        try:
+            page_raw = viewport_ctx.get("page")
+            effective_page = int(page_raw) if page_raw is not None else None
+        except Exception:
+            effective_page = None
 
-    permission = context_permissions.get(file_id, PermissionLevel.READ)
-    if permission == PermissionLevel.NONE:
-        return {"viewport": viewport_ctx, "excerpt": None}
+    visible_range = viewport_ctx.get("visible_range")
+    visible_start = active_visible_start
+    visible_end = active_visible_end
+    if (
+        visible_start is None
+        and visible_end is None
+        and isinstance(visible_range, list)
+        and len(visible_range) >= 2
+    ):
+        try:
+            visible_start = int(visible_range[0])
+            visible_end = int(visible_range[1])
+        except Exception:
+            visible_start = None
+            visible_end = None
 
-    file_result = await db.execute(select(FileModel).where(FileModel.id == file_id))
-    file_row = file_result.scalar_one_or_none()
-    if not file_row:
-        return {"viewport": viewport_ctx, "excerpt": None}
-
-    excerpt = None
-    file_type = _file_type_to_str(file_row.file_type)
-    if file_type == "pdf":
-        chunks_result = await db.execute(
-            select(DocumentChunk)
-            .where(and_(DocumentChunk.file_id == file_id, DocumentChunk.page == page))
-            .order_by(DocumentChunk.chunk_index)
-        )
-        chunks = chunks_result.scalars().all()
-        text = "\n".join(chunk.content for chunk in chunks)
-        if text:
-            excerpt = text[: settings.VIEWPORT_EXCERPT_MAX_CHARS]
-    elif file_type in ("md", "txt", "code"):
-        content_result = await db.execute(
-            select(DocumentChunk)
-            .where(DocumentChunk.file_id == file_id)
-            .order_by(DocumentChunk.page, DocumentChunk.chunk_index)
-            .limit(3)
-        )
-        chunks = content_result.scalars().all()
-        text = "\n".join(chunk.content for chunk in chunks)
-        if text:
-            excerpt = text[: settings.VIEWPORT_EXCERPT_MAX_CHARS]
+    viewport_memory = await build_viewport_memory(
+        db=db,
+        session_id=session_id,
+        context_permissions=context_permissions,
+        active_file_id=effective_file_id,
+        active_page=effective_page,
+        active_visible_unit=active_visible_unit or viewport_ctx.get("visible_unit"),
+        active_visible_start=visible_start,
+        active_visible_end=visible_end,
+        active_anchor_block_id=active_anchor_block_id,
+        require_effective_note_view=True,
+    )
+    excerpt = viewport_memory.get("memory_text")
+    if not excerpt and effective_file_id:
+        permission = context_permissions.get(effective_file_id, PermissionLevel.READ)
+        if permission != PermissionLevel.NONE:
+            chunk_query = select(DocumentChunk).where(DocumentChunk.file_id == effective_file_id)
+            if effective_page is not None:
+                chunk_query = chunk_query.where(DocumentChunk.page == effective_page)
+            chunk_query = chunk_query.order_by(DocumentChunk.page, DocumentChunk.chunk_index).limit(6)
+            chunk_rows = (await db.execute(chunk_query)).scalars().all()
+            merged = "\n".join(str(row.content or "").strip() for row in chunk_rows if str(row.content or "").strip())
+            excerpt = merged.strip() or None
 
     return {
-        "viewport": {
-            "file_id": file_id,
-            "file_name": file_row.name,
-            "file_type": file_type,
-            "page": page,
-            "visible_range": viewport_ctx.get("visible_range"),
-        },
+        "viewport": viewport_memory.get("viewport") or viewport_ctx,
         "excerpt": excerpt,
     }
 
 
-async def retrieve_context_blocks(
+def get_viewport_context(session_id: str, file_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    # Compatibility hook kept for tests and legacy monkeypatching.
+    if not str(session_id or "").strip():
+        return None
+    if file_id:
+        return {"file_id": file_id}
+    return None
+
+
+async def _retrieve_context_blocks_single(
     *,
     db: AsyncSession,
     query: str,
@@ -512,6 +672,7 @@ async def retrieve_context_blocks(
                 "file_name": (permitted_files_info.get(file_id) or {}).get("name", "Unknown"),
                 "page": page,
                 "section": section,
+                "chunk_index": item.get("chunk_index"),
                 "score": round(float(item.get("score", 0.0)), 4),
                 "segment_type": item.get("segment_type"),
                 "source_mode": source_mode,
@@ -529,3 +690,262 @@ async def retrieve_context_blocks(
         "retrieval_diagnostics": retrieval_diagnostics,
         "used_tokens": used_tokens,
     }
+
+
+def build_evidence_cards(
+    citations: List[Dict[str, Any]],
+    *,
+    map_batch_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    if not citations:
+        return {"cards": [], "stop_reason": "no_candidates"}
+
+    batch_size = max(1, int(map_batch_size or settings.RAG_MAP_BATCH_SIZE or 10))
+    cards: List[Dict[str, Any]] = []
+    added = 0
+    low_gain_batches = 0
+    i = 0
+    while i < len(citations):
+        batch = citations[i : i + batch_size]
+        batch_new = 0
+        for item in batch:
+            content = short_text(str(item.get("content") or ""), 220)
+            if not content:
+                continue
+            page = item.get("page")
+            section = item.get("section")
+            cards.append(
+                {
+                    "claim": content,
+                    "condition": f"page={page}" if page is not None else f"section={section or 'N/A'}",
+                    "source": {
+                        "file_id": item.get("file_id"),
+                        "page": page,
+                        "section": section,
+                        "segment_type": item.get("segment_type"),
+                        "source_mode": item.get("source_mode"),
+                    },
+                }
+            )
+            batch_new += 1
+            added += 1
+
+        if batch_new < 2:
+            low_gain_batches += 1
+        else:
+            low_gain_batches = 0
+
+        if low_gain_batches >= 2:
+            return {"cards": cards, "stop_reason": "marginal_gain_stop"}
+        i += batch_size
+
+    return {"cards": cards, "stop_reason": "exhausted_candidates"}
+
+
+def _merge_query_results(
+    *,
+    per_query_results: List[Dict[str, Any]],
+    query_bundle: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not per_query_results:
+        return {
+            "context_parts": [],
+            "citations": [],
+            "retrieval_refs": [],
+            "semantic_failed": True,
+            "visual_hits_count": 0,
+            "retrieval_diagnostics": {
+                "text_hits": 0,
+                "image_hits": 0,
+                "fused_hits": 0,
+                "fallback_flags": ["no_query_results"],
+            },
+            "used_tokens": 0,
+            "retrieval_meta": {
+                "query_bundle": query_bundle,
+                "candidate_count": 0,
+                "reranked_count": 0,
+                "evidence_count": 0,
+                "stop_reason": "no_candidates",
+            },
+            "evidence_cards": [],
+        }
+
+    weighted_refs: Dict[str, Dict[str, Any]] = {}
+    candidate_count = 0
+    merged_diagnostics = defaultdict(int)
+    merged_fallback_flags: List[str] = []
+    visual_hits_count = 0
+    semantic_failed = False
+
+    for idx, result in enumerate(per_query_results):
+        query_weight = 1.0
+        if idx < len(query_bundle):
+            try:
+                query_weight = float(query_bundle[idx].get("weight") or 1.0)
+            except Exception:
+                query_weight = 1.0
+        refs = result.get("retrieval_refs") or []
+        candidate_count += len(refs)
+        diagnostics = result.get("retrieval_diagnostics") or {}
+        for key in ("text_hits", "image_hits", "fused_hits"):
+            merged_diagnostics[key] += int(diagnostics.get(key) or 0)
+        merged_fallback_flags.extend(diagnostics.get("fallback_flags") or [])
+        visual_hits_count += int(result.get("visual_hits_count") or 0)
+        semantic_failed = semantic_failed or bool(result.get("semantic_failed"))
+
+        citation_lookup: Dict[str, Dict[str, Any]] = {}
+        for citation in result.get("citations") or []:
+            key = f"{citation.get('file_id')}:{citation.get('page')}:{citation.get('chunk_index')}"
+            citation_lookup[key] = citation
+
+        for ref in refs:
+            key = f"{ref.get('file_id')}:{ref.get('page')}:{ref.get('chunk_index')}"
+            score = float(ref.get("score") or 0.0) * query_weight
+            existing = weighted_refs.get(key)
+            if not existing or score > float(existing.get("score") or 0.0):
+                citation = citation_lookup.get(key) or {}
+                weighted_refs[key] = {
+                    "file_id": ref.get("file_id"),
+                    "file_name": ref.get("file_name"),
+                    "page": ref.get("page"),
+                    "section": ref.get("section"),
+                    "chunk_index": ref.get("chunk_index"),
+                    "score": score,
+                    "segment_type": ref.get("segment_type"),
+                    "source_mode": ref.get("source_mode"),
+                    "image_url": ref.get("image_url"),
+                    "reason": ref.get("reason"),
+                    "content": citation.get("content") or "",
+                }
+
+    sorted_refs = sorted(weighted_refs.values(), key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    top_refs = sorted_refs[: max(1, int(settings.RAG_RERANK_TOPN or 60))]
+
+    context_parts: List[str] = []
+    citations: List[Dict[str, Any]] = []
+    retrieval_refs: List[Dict[str, Any]] = []
+    used_tokens = 0
+    stop_reason = "exhausted_candidates"
+    for ref in top_refs:
+        content = str(ref.get("content") or "").strip()
+        if not content:
+            continue
+        block_tokens = estimate_tokens(content)
+        if used_tokens + block_tokens > int(settings.DOC_CONTEXT_BUDGET_TOKENS):
+            stop_reason = "budget_limit"
+            break
+        used_tokens += block_tokens
+
+        page = ref.get("page")
+        section = ref.get("section")
+        segment_prefix = _format_segment_prefix(ref.get("segment_type"))
+        location_label = f"Page {page}" if page is not None else f"Section {section or 'N/A'}"
+        block_header = f"{segment_prefix} · {location_label}" if segment_prefix else location_label
+        source_mode = ref.get("source_mode", "text_retrieval")
+        if str(source_mode).startswith("vision") or str(source_mode).startswith("visual"):
+            context_parts.append(f"[Visual-Focus Document: {ref.get('file_id')}, Anchor {block_header}]:\n{content}")
+        else:
+            context_parts.append(f"[Document: {ref.get('file_id')}, {block_header}]:\n{content}")
+        citations.append(
+            {
+                "file_id": ref.get("file_id"),
+                "page": page,
+                "section": section,
+                "chunk_index": ref.get("chunk_index"),
+                "segment_type": ref.get("segment_type"),
+                "content": short_text(content, 200),
+                "source_mode": source_mode,
+                "image_url": ref.get("image_url"),
+                "reason": ref.get("reason"),
+            }
+        )
+        retrieval_refs.append(
+            {
+                "file_id": ref.get("file_id"),
+                "file_name": ref.get("file_name"),
+                "page": page,
+                "section": section,
+                "score": round(float(ref.get("score") or 0.0), 4),
+                "segment_type": ref.get("segment_type"),
+                "source_mode": source_mode,
+                "image_url": ref.get("image_url"),
+                "reason": ref.get("reason"),
+            }
+        )
+
+    evidence = build_evidence_cards(citations, map_batch_size=settings.RAG_MAP_BATCH_SIZE)
+    if stop_reason == "exhausted_candidates" and evidence.get("stop_reason"):
+        stop_reason = str(evidence.get("stop_reason"))
+
+    return {
+        "context_parts": context_parts,
+        "citations": citations,
+        "retrieval_refs": retrieval_refs,
+        "semantic_failed": semantic_failed,
+        "visual_hits_count": visual_hits_count,
+        "retrieval_diagnostics": {
+            "text_hits": merged_diagnostics["text_hits"],
+            "image_hits": merged_diagnostics["image_hits"],
+            "fused_hits": merged_diagnostics["fused_hits"],
+            "fallback_flags": merged_fallback_flags,
+        },
+        "used_tokens": used_tokens,
+        "retrieval_meta": {
+            "query_bundle": query_bundle,
+            "candidate_count": candidate_count,
+            "reranked_count": len(top_refs),
+            "evidence_count": len(evidence.get("cards") or []),
+            "stop_reason": stop_reason,
+        },
+        "evidence_cards": evidence.get("cards") or [],
+    }
+
+
+async def retrieve_context_blocks(
+    *,
+    db: AsyncSession,
+    query: str,
+    readable_files: List[str],
+    permitted_files_info: Dict[str, Dict[str, str]],
+    active_file_id: Optional[str],
+    active_page: Optional[int],
+) -> Dict[str, Any]:
+    query_bundle = build_query_bundle(query)
+    if not query_bundle:
+        query_bundle = [{"text": str(query or ""), "lang": "unknown", "weight": 1.0, "source": "original"}]
+
+    if not settings.RAG_BILINGUAL_PARALLEL_ENABLED or len(query_bundle) <= 1:
+        single = await _retrieve_context_blocks_single(
+            db=db,
+            query=query,
+            readable_files=readable_files,
+            permitted_files_info=permitted_files_info,
+            active_file_id=active_file_id,
+            active_page=active_page,
+        )
+        evidence = build_evidence_cards(single.get("citations") or [], map_batch_size=settings.RAG_MAP_BATCH_SIZE)
+        single["retrieval_meta"] = {
+            "query_bundle": query_bundle,
+            "candidate_count": len(single.get("retrieval_refs") or []),
+            "reranked_count": len(single.get("retrieval_refs") or []),
+            "evidence_count": len(evidence.get("cards") or []),
+            "stop_reason": str(evidence.get("stop_reason") or "single_query"),
+        }
+        single["evidence_cards"] = evidence.get("cards") or []
+        return single
+
+    # AsyncSession is not safe for concurrent query execution on the same session.
+    # Run bundle retrievals sequentially and fuse afterwards.
+    results: List[Dict[str, Any]] = []
+    for item in query_bundle:
+        result = await _retrieve_context_blocks_single(
+            db=db,
+            query=str(item.get("text") or query),
+            readable_files=readable_files,
+            permitted_files_info=permitted_files_info,
+            active_file_id=active_file_id,
+            active_page=active_page,
+        )
+        results.append(result)
+    return _merge_query_results(per_query_results=results, query_bundle=query_bundle)

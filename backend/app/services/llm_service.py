@@ -123,6 +123,7 @@ class LLMService:
         model: Optional[str] = None,
         stream: bool = False,
         tools: Optional[List[Dict]] = None,
+        tool_choice: Optional[Any] = None,
         system_prompt: Optional[str] = None,
         on_stream_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -133,6 +134,7 @@ class LLMService:
                 messages=messages,
                 model=selected_model,
                 tools=tools,
+                tool_choice=tool_choice,
                 system_prompt=system_prompt,
             )
 
@@ -143,6 +145,7 @@ class LLMService:
                 model=selected_model,
                 stream=stream,
                 tools=tools,
+                tool_choice=tool_choice,
                 system_prompt=system_prompt,
                 on_stream_delta=on_stream_delta,
             )
@@ -162,6 +165,7 @@ class LLMService:
             model=selected_model,
             stream=stream,
             tools=tools,
+            tool_choice=tool_choice,
             system_prompt=system_prompt,
             on_stream_delta=on_stream_delta,
         )
@@ -173,8 +177,9 @@ class LLMService:
         model: str,
         stream: bool,
         tools: Optional[List[Dict]],
-        system_prompt: Optional[str],
-        on_stream_delta: Optional[Callable[[str], Awaitable[None]]],
+        tool_choice: Optional[Any] = None,
+        system_prompt: Optional[str] = None,
+        on_stream_delta: Optional[Callable[[str], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         request_messages = messages
         if system_prompt:
@@ -187,7 +192,11 @@ class LLMService:
         }
         if tools:
             kwargs["tools"] = tools
-            kwargs["tool_choice"] = "auto"
+            if isinstance(tool_choice, dict):
+                kwargs["tool_choice"] = tool_choice
+            else:
+                normalized_tool_choice = str(tool_choice or "auto").strip().lower()
+                kwargs["tool_choice"] = normalized_tool_choice if normalized_tool_choice in {"auto", "required", "none"} else "auto"
 
         if stream:
             return await self._stream_openai_compatible_chat(
@@ -336,7 +345,8 @@ class LLMService:
         messages: List[Dict[str, Any]],
         model: str,
         tools: Optional[List[Dict]],
-        system_prompt: Optional[str],
+        tool_choice: Optional[Any] = None,
+        system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         if not self.anthropic_client:
             raise ValueError("Anthropic API key not configured")

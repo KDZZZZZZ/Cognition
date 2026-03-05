@@ -73,7 +73,7 @@ async def test_chat_completion_defers_retrieval_until_tools_request_it(
 
     captured_messages: list[dict] = []
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None, tool_choice=None, **kwargs):
         del model, stream, tools, system_prompt, on_stream_delta
         captured_messages[:] = messages
         return {
@@ -127,7 +127,7 @@ async def test_chat_completion_prompts_model_to_end_round_after_all_tasks_comple
     llm_rounds = {"count": 0}
     saw_wrap_prompt = {"value": False}
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None, tool_choice=None, **kwargs):
         del model, stream, tools, system_prompt, on_stream_delta
         llm_rounds["count"] += 1
         if llm_rounds["count"] == 1:
@@ -198,7 +198,7 @@ async def test_chat_completion_includes_previous_user_turn_in_followup_request(
     session_id = f"history-followup-{uuid4()}"
     captured_rounds: list[list[dict[str, str]]] = []
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None, tool_choice=None, **kwargs):
         del model, stream, tools, system_prompt, on_stream_delta
         captured_rounds.append(list(messages))
         return {
@@ -245,7 +245,7 @@ async def test_chat_completion_persists_user_message_before_task_finishes(
     session_id = f"user-persist-{uuid4()}"
     message = "这条消息在任务失败时也必须保留。"
 
-    async def failing_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None):
+    async def failing_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None, tool_choice=None, **kwargs):
         del messages, model, stream, tools, system_prompt, on_stream_delta
         raise RuntimeError("model boom")
 
@@ -416,7 +416,7 @@ async def test_chat_completion_simulates_all_non_pause_tools(
 
     round_calls = {"count": 0}
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None, tool_choice=None, **kwargs):
         del messages, tools, system_prompt
         round_calls["count"] += 1
         if round_calls["count"] == 1:

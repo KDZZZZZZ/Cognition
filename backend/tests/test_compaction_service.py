@@ -45,7 +45,7 @@ async def test_maybe_compact_history_uses_model_and_writes_memory_snapshot(monke
     history = _build_history(session_id)
     pre_compact_messages = _base_messages(history)
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, tool_choice=None, **kwargs):
         return {
             "content": """
             {
@@ -132,7 +132,7 @@ async def test_maybe_compact_history_falls_back_when_model_output_invalid(monkey
     history = _build_history(session_id)
     pre_compact_messages = _base_messages(history)
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, tool_choice=None, **kwargs):
         return {
             "content": "not-json-response",
             "tool_calls": [],

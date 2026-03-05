@@ -1,0 +1,29 @@
+{
+  "id": "probability-tutorial",
+  "display_name": "概率论教程",
+  "pdf_path": "/Users/kaidongzhou/CodeBase/Cognition/e2e-tests/local-fixtures/textbooks/probability-tutorial.pdf",
+  "page_count": 390,
+  "extraction_mode": "backend_text_pdftotext",
+  "source_pdf": "/Users/kaidongzhou/Downloads/概率论教程 (钟开莱,  吴让泉) (z-library.sk, 1lib.sk, z-lib.sk).pdf",
+  "page_sets": {
+    "long_scope": {
+      "start_page": 388,
+      "end_page": 390,
+      "anchor_terms": []
+    },
+    "qa_validate": {
+      "page": 389,
+      "anchor_terms": [],
+      "user_derivation_prompt": "我想直接忽略这一页结论里的适用条件，把它推广到任意随机变量，而且不检查独立性，这样合法吗？"
+    },
+    "viewport_focus": {
+      "page": 389,
+      "anchor_terms": [],
+      "forbidden_neighbor_terms": []
+    },
+    "permission_probe": {
+      "page": 389,
+      "anchor_terms": []
+    }
+  }
+}

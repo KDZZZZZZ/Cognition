@@ -5,22 +5,21 @@ Tracks user viewing position across documents to enable AI context awareness.
 This implements the "Gaze/Viewport Tracking" feature from the PRD.
 """
 
+import asyncio
+
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
-from datetime import datetime
 
 from app.database import get_db
 from app.models import Session, File as FileModel
 from app.schemas import APIResponse, ViewportUpdateRequest
+from app.services.viewport_memory_service import get_latest_viewport, list_session_viewports, persist_viewport
 
 router = APIRouter(prefix="/viewport", tags=["viewport"])
-
-
-# In-memory store for viewport state (can be moved to Redis for production)
-# Structure: {session_id: {file_id: {...viewport_data...}}}
-_viewport_store: dict = {}
+VIEWPORT_WRITE_MAX_RETRIES = 4
 
 
 @router.post("/update", response_model=APIResponse)
@@ -63,26 +62,62 @@ async def update_viewport(
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
 
-    # Store viewport state
-    if session_id not in _viewport_store:
-        _viewport_store[session_id] = {}
+    visible_unit = payload.visible_unit or "pixel"
+    visible_start = payload.visible_start if payload.visible_start is not None else visible_range_start
+    visible_end = payload.visible_end if payload.visible_end is not None else visible_range_end
 
-    _viewport_store[session_id][file_id] = {
-        "file_id": file_id,
-        "file_name": file.name,
-        "file_type": file.file_type.value,
-        "page": page,
-        "scroll_y": scroll_y,
-        "visible_range": [visible_range_start, visible_range_end],
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    row = None
+    for attempt in range(VIEWPORT_WRITE_MAX_RETRIES):
+        try:
+            row = await persist_viewport(
+                db=db,
+                session_id=session_id,
+                file_id=file_id,
+                file_name=file.name,
+                file_type=file.file_type.value,
+                page=page,
+                visible_unit=visible_unit,
+                visible_start=visible_start,
+                visible_end=visible_end,
+                anchor_block_id=payload.anchor_block_id,
+                pending_diff_event_id=payload.pending_diff_event_id,
+                scroll_y=scroll_y,
+            )
+            await db.commit()
+            break
+        except OperationalError as exc:
+            await db.rollback()
+            err_text = str(getattr(exc, "orig", exc) or "").lower()
+            is_locked = "database is locked" in err_text or "locked" in err_text
+            if is_locked and attempt < VIEWPORT_WRITE_MAX_RETRIES - 1:
+                await asyncio.sleep(0.05 * (attempt + 1))
+                continue
+            if is_locked:
+                raise HTTPException(status_code=503, detail="Viewport storage is busy, please retry.")
+            raise
+
+    if row is None:
+        raise HTTPException(status_code=503, detail="Viewport update failed after retries.")
 
     return APIResponse(
         success=True,
         data={
             "session_id": session_id,
             "file_id": file_id,
-            "viewport": _viewport_store[session_id][file_id]
+            "viewport": {
+                "file_id": row.file_id,
+                "file_name": row.file_name,
+                "file_type": row.file_type,
+                "page": row.page,
+                "scroll_y": row.scroll_y,
+                "visible_unit": row.visible_unit,
+                "visible_start": row.visible_start,
+                "visible_end": row.visible_end,
+                "visible_range": [row.visible_start or 0, row.visible_end or 0],
+                "anchor_block_id": row.anchor_block_id,
+                "pending_diff_event_id": row.pending_diff_event_id,
+                "timestamp": row.updated_at.isoformat() if row.updated_at else None,
+            }
         }
     )
 
@@ -107,10 +142,26 @@ async def get_viewport(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    session_viewports = _viewport_store.get(session_id, {})
-
     if file_id:
-        viewport = session_viewports.get(file_id)
+        row = await get_latest_viewport(db, session_id=session_id, file_id=file_id)
+        viewport = (
+            {
+                "file_id": row.file_id,
+                "file_name": row.file_name,
+                "file_type": row.file_type,
+                "page": row.page,
+                "scroll_y": row.scroll_y,
+                "visible_unit": row.visible_unit,
+                "visible_start": row.visible_start,
+                "visible_end": row.visible_end,
+                "visible_range": [row.visible_start or 0, row.visible_end or 0],
+                "anchor_block_id": row.anchor_block_id,
+                "pending_diff_event_id": row.pending_diff_event_id,
+                "timestamp": row.updated_at.isoformat() if row and row.updated_at else None,
+            }
+            if row
+            else None
+        )
         if not viewport:
             raise HTTPException(status_code=404, detail="No viewport data for this file")
         return APIResponse(
@@ -119,12 +170,30 @@ async def get_viewport(
         )
 
     # Return all viewports for session
+    rows = await list_session_viewports(db, session_id)
+    viewports = [
+        {
+            "file_id": row.file_id,
+            "file_name": row.file_name,
+            "file_type": row.file_type,
+            "page": row.page,
+            "scroll_y": row.scroll_y,
+            "visible_unit": row.visible_unit,
+            "visible_start": row.visible_start,
+            "visible_end": row.visible_end,
+            "visible_range": [row.visible_start or 0, row.visible_end or 0],
+            "anchor_block_id": row.anchor_block_id,
+            "pending_diff_event_id": row.pending_diff_event_id,
+            "timestamp": row.updated_at.isoformat() if row.updated_at else None,
+        }
+        for row in rows
+    ]
     return APIResponse(
         success=True,
         data={
             "session_id": session_id,
-            "viewports": list(session_viewports.values()),
-            "active_count": len(session_viewports)
+            "viewports": viewports,
+            "active_count": len(viewports)
         }
     )
 
@@ -142,54 +211,21 @@ async def clear_viewport(
         session_id: The chat session ID
         file_id: Optional specific file to clear, or all if not provided
     """
-    if session_id not in _viewport_store:
-        return APIResponse(
-            success=True,
-            data={"message": "No viewport data to clear"}
-        )
-
     if file_id:
-        if file_id in _viewport_store[session_id]:
-            del _viewport_store[session_id][file_id]
+        row = await get_latest_viewport(db, session_id=session_id, file_id=file_id)
+        if row:
+            await db.delete(row)
+            await db.commit()
         return APIResponse(
             success=True,
             data={"message": f"Viewport cleared for file {file_id}"}
         )
     else:
-        del _viewport_store[session_id]
+        rows = await list_session_viewports(db, session_id)
+        for row in rows:
+            await db.delete(row)
+        await db.commit()
         return APIResponse(
             success=True,
             data={"message": "All viewport data cleared for session"}
         )
-
-
-def get_viewport_context(session_id: str, file_id: Optional[str] = None) -> Optional[dict]:
-    """
-    Get viewport context for LLM injection.
-
-    This function is called by the chat service to include
-    viewport context in the system prompt.
-
-    Args:
-        session_id: The chat session ID
-        file_id: Optional file to get context for
-
-    Returns:
-        Viewport context dict or None if not found
-    """
-    session_viewports = _viewport_store.get(session_id, {})
-
-    if file_id:
-        return session_viewports.get(file_id)
-
-    # Return most recent viewport if no file specified
-    if session_viewports:
-        # Sort by timestamp and return most recent
-        viewports = sorted(
-            session_viewports.values(),
-            key=lambda x: x.get("timestamp", ""),
-            reverse=True
-        )
-        return viewports[0] if viewports else None
-
-    return None

@@ -78,6 +78,60 @@ export interface TaskEventPayload {
   payload?: Record<string, any>;
 }
 
+export interface RouterStatePayload {
+  primary_mode: string;
+  mixed_modes: string[];
+  workflow_ids: string[];
+  template_ids: string[];
+  tool_mode: string;
+}
+
+export interface TaskRegistryStepPayload {
+  index: number;
+  type: string;
+  status: string;
+  missing_inputs?: Array<Record<string, any>>;
+  output_preview?: string;
+  compact_anchor?: Record<string, any> | null;
+}
+
+export interface TaskRegistryTaskPayload {
+  task_id: string;
+  goal: string;
+  status: string;
+  task_order: number;
+  current_step_index: number;
+  total_steps: number;
+  blocked_reason?: string | null;
+  missing_inputs?: Array<Record<string, any>>;
+  artifacts?: Record<string, any>;
+  steps: TaskRegistryStepPayload[];
+}
+
+export interface TaskRegistryPayload {
+  registry_id: string;
+  session_id: string;
+  status: string;
+  active_task_id?: string | null;
+  goal_summary?: string | null;
+  catalog_version: number;
+  tasks: TaskRegistryTaskPayload[];
+}
+
+export interface BudgetBucketPayload {
+  cap: number;
+  used: number;
+}
+
+export interface BudgetMetaPayload {
+  triggered: boolean;
+  reason?: string;
+  input_target_ratio?: number;
+  total_input_tokens?: number;
+  tool_schema_tokens?: number;
+  buckets?: Record<string, BudgetBucketPayload>;
+}
+
 export interface SessionSummary {
   id: string;
   name: string;
@@ -92,6 +146,10 @@ export interface ChatCompletionOptions {
   signal?: AbortSignal;
   activeFileId?: string;
   activePage?: number;
+  activeVisibleUnit?: 'page' | 'line' | 'paragraph' | 'pixel';
+  activeVisibleStart?: number;
+  activeVisibleEnd?: number;
+  activeAnchorBlockId?: string;
   compactMode?: 'auto' | 'off' | 'force';
 }
 
@@ -386,6 +444,10 @@ class ApiClient {
     if (options?.taskId) payload.task_id = options.taskId;
     if (options?.activeFileId) payload.active_file_id = options.activeFileId;
     if (typeof options?.activePage === 'number') payload.active_page = options.activePage;
+    if (options?.activeVisibleUnit) payload.active_visible_unit = options.activeVisibleUnit;
+    if (typeof options?.activeVisibleStart === 'number') payload.active_visible_start = options.activeVisibleStart;
+    if (typeof options?.activeVisibleEnd === 'number') payload.active_visible_end = options.activeVisibleEnd;
+    if (options?.activeAnchorBlockId) payload.active_anchor_block_id = options.activeAnchorBlockId;
     if (options?.compactMode) payload.compact_mode = options.compactMode;
 
     return this.post(
@@ -460,7 +522,20 @@ class ApiClient {
   }
 
   // Viewport tracking
-  async updateViewport(sessionId: string, fileId: string, page: number, scrollY: number, scrollHeight: number): Promise<ApiResponse> {
+  async updateViewport(
+    sessionId: string,
+    fileId: string,
+    page: number,
+    scrollY: number,
+    scrollHeight: number,
+    options?: {
+      visibleUnit?: 'page' | 'line' | 'paragraph' | 'pixel';
+      visibleStart?: number;
+      visibleEnd?: number;
+      anchorBlockId?: string;
+      pendingDiffEventId?: string;
+    }
+  ): Promise<ApiResponse> {
     return this.post('/api/v1/viewport/update', {
       session_id: sessionId,
       file_id: fileId,
@@ -468,6 +543,11 @@ class ApiClient {
       scroll_y: scrollY,
       visible_range_start: Math.max(0, Math.floor(scrollY)),
       visible_range_end: Math.max(0, Math.floor(scrollY + scrollHeight)),
+      visible_unit: options?.visibleUnit,
+      visible_start: typeof options?.visibleStart === 'number' ? Math.max(0, Math.floor(options.visibleStart)) : undefined,
+      visible_end: typeof options?.visibleEnd === 'number' ? Math.max(0, Math.floor(options.visibleEnd)) : undefined,
+      anchor_block_id: options?.anchorBlockId,
+      pending_diff_event_id: options?.pendingDiffEventId,
     });
   }
 

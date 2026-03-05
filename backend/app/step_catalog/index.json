@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "recipes": {
+    "textbook_long_scope": ["TB_PARSE_SCOPE", "TB_EXTRACT_CORE", "TB_WRITE_NOTES", "TB_UPDATE_INDEX", "TB_UPDATE_NOTATION", "QUALITY_REVIEW", "CONTEXT_COMPACT"],
+    "textbook_qa": ["TB_QA_VALIDATE", "CONTEXT_COMPACT"],
+    "paper_accumulation": ["P_READ_SKELETON", "P_SUMMARY_CARD", "QUALITY_REVIEW", "CONTEXT_COMPACT"],
+    "paper_search": ["P_SEARCH_PLAN", "P_CANDIDATE_LIST"],
+    "general_problem": ["GEN_PARSE", "GEN_ANSWER", "GEN_VERIFY", "GEN_FOLLOWUP"]
+  },
+  "steps": {
+    "TB_PARSE_SCOPE": {
+      "summary": "解析教材范围，生成骨架与编号方案",
+      "category": "textbook",
+      "required_inputs": ["scope_or_viewport", "source_material"],
+      "minimum_substitutes": {
+        "scope_or_viewport": "章/节/页码/截图范围四选一",
+        "source_material": "原文、截图、OCR、可读取文档四选一"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "never",
+      "result_kind": "artifact",
+      "aliases": []
+    },
+    "TB_EXTRACT_CORE": {
+      "summary": "抽取教材中的定义、定理、技巧、问题和桥",
+      "category": "textbook",
+      "required_inputs": ["source_material"],
+      "minimum_substitutes": {
+        "source_material": "至少提供本节原文、截图、OCR、或可读文件"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "never",
+      "result_kind": "artifact",
+      "aliases": []
+    },
+    "TB_WRITE_NOTES": {
+      "summary": "按章节小节模板写教材笔记",
+      "category": "textbook",
+      "required_inputs": ["source_material", "writable_note"],
+      "minimum_substitutes": {
+        "source_material": "至少提供当前节原文或可读文档",
+        "writable_note": "提供一个可写 markdown note"
+      },
+      "allowed_tool_groups": ["reader", "editor", "control"],
+      "writeback_policy": "required",
+      "result_kind": "write",
+      "aliases": []
+    },
+    "TB_UPDATE_INDEX": {
+      "summary": "更新教材 note 的四个索引",
+      "category": "textbook",
+      "required_inputs": ["writable_note"],
+      "minimum_substitutes": {
+        "writable_note": "提供一个可写 markdown note"
+      },
+      "allowed_tool_groups": ["editor", "control"],
+      "writeback_policy": "required",
+      "result_kind": "write",
+      "aliases": []
+    },
+    "TB_UPDATE_NOTATION": {
+      "summary": "更新教材 note 的符号表",
+      "category": "textbook",
+      "required_inputs": ["writable_note"],
+      "minimum_substitutes": {
+        "writable_note": "提供一个可写 markdown note"
+      },
+      "allowed_tool_groups": ["editor", "control"],
+      "writeback_policy": "required",
+      "result_kind": "write",
+      "aliases": []
+    },
+    "TB_QA_VALIDATE": {
+      "summary": "核对教材答疑或思路求证",
+      "category": "textbook",
+      "required_inputs": ["user_reasoning", "source_material"],
+      "minimum_substitutes": {
+        "user_reasoning": "给出已知、目标、你的推导或疑问",
+        "source_material": "给出原文、截图、OCR、或可读文档"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "optional",
+      "result_kind": "answer",
+      "aliases": []
+    },
+    "P_SEARCH_PLAN": {
+      "summary": "把研究问题转成可执行检索计划",
+      "category": "paper",
+      "required_inputs": ["research_topic"],
+      "minimum_substitutes": {
+        "research_topic": "至少提供研究主题、关键词或应用场景"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "never",
+      "result_kind": "answer",
+      "aliases": []
+    },
+    "P_CANDIDATE_LIST": {
+      "summary": "给出论文候选池和阅读顺序",
+      "category": "paper",
+      "required_inputs": ["paper_material"],
+      "minimum_substitutes": {
+        "paper_material": "提供候选论文列表、检索结果、或至少一个可读文档"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "never",
+      "result_kind": "answer",
+      "aliases": []
+    },
+    "P_READ_SKELETON": {
+      "summary": "快速建立论文骨架",
+      "category": "paper",
+      "required_inputs": ["paper_material"],
+      "minimum_substitutes": {
+        "paper_material": "提供论文标题、摘要、方法节、图表描述或可读文件"
+      },
+      "allowed_tool_groups": ["reader", "visual", "control"],
+      "writeback_policy": "never",
+      "result_kind": "artifact",
+      "aliases": []
+    },
+    "P_SUMMARY_CARD": {
+      "summary": "生成论文积累卡片",
+      "category": "paper",
+      "required_inputs": ["paper_material"],
+      "minimum_substitutes": {
+        "paper_material": "至少提供摘要+方法节+关键公式或图表描述"
+      },
+      "allowed_tool_groups": ["reader", "visual", "editor", "control"],
+      "writeback_policy": "optional",
+      "result_kind": "answer",
+      "aliases": []
+    },
+    "P_REPRO_PLAN": {
+      "summary": "生成论文复现最小闭环",
+      "category": "paper",
+      "required_inputs": ["paper_material"],
+      "minimum_substitutes": {
+        "paper_material": "至少提供方法与实验设定或对应可读文件"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "never",
+      "result_kind": "answer",
+      "aliases": []
+    },
+    "QUALITY_REVIEW": {
+      "summary": "审阅前面结果的条件、符号、锚点与桥是否一致",
+      "category": "quality",
+      "required_inputs": ["prior_outputs"],
+      "minimum_substitutes": {
+        "prior_outputs": "至少需要本轮前面已有的 step 输出"
+      },
+      "allowed_tool_groups": ["control"],
+      "writeback_policy": "never",
+      "result_kind": "review",
+      "aliases": []
+    },
+    "CONTEXT_COMPACT": {
+      "summary": "把当前任务成果压成可继续工作的最小锚点",
+      "category": "memory",
+      "required_inputs": ["prior_outputs"],
+      "minimum_substitutes": {
+        "prior_outputs": "至少需要本轮前面已有的 step 输出"
+      },
+      "allowed_tool_groups": [],
+      "writeback_policy": "never",
+      "result_kind": "compact",
+      "aliases": []
+    },
+    "GEN_PARSE": {
+      "summary": "解析一般问题的目标、约束和阻塞澄清",
+      "category": "general",
+      "required_inputs": ["user_reasoning"],
+      "minimum_substitutes": {
+        "user_reasoning": "至少需要用户当前问题"
+      },
+      "allowed_tool_groups": ["control"],
+      "writeback_policy": "never",
+      "result_kind": "answer",
+      "aliases": ["GEN_QA"]
+    },
+    "GEN_ANSWER": {
+      "summary": "生成一般问题的主答案",
+      "category": "general",
+      "required_inputs": ["user_reasoning"],
+      "minimum_substitutes": {
+        "user_reasoning": "至少需要用户当前问题"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "never",
+      "result_kind": "answer",
+      "aliases": []
+    },
+    "GEN_VERIFY": {
+      "summary": "对一般问题答案做分步校验",
+      "category": "general",
+      "required_inputs": ["prior_outputs"],
+      "minimum_substitutes": {
+        "prior_outputs": "至少需要前面已经生成的答案"
+      },
+      "allowed_tool_groups": ["reader", "control"],
+      "writeback_policy": "never",
+      "result_kind": "review",
+      "aliases": []
+    },
+    "GEN_FOLLOWUP": {
+      "summary": "给出一个最小的后续建议或二选一继续项",
+      "category": "general",
+      "required_inputs": ["prior_outputs"],
+      "minimum_substitutes": {
+        "prior_outputs": "至少需要前面已经生成的答案或验证结果"
+      },
+      "allowed_tool_groups": ["control"],
+      "writeback_policy": "never",
+      "result_kind": "answer",
+      "aliases": []
+    }
+  }
+}

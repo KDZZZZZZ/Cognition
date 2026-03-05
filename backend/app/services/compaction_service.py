@@ -720,3 +720,174 @@ async def maybe_compact_history(
         "latest_summary": latest_for_new.get("summary"),
         "compact_rule": COMPACT_RULE_TEXT,
     }
+
+
+def format_compact_snapshot(latest_snapshot: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(latest_snapshot, dict):
+        return None
+    summary = str(latest_snapshot.get("summary") or "").strip()
+    if not summary:
+        return None
+    parts = [summary]
+    key_state = latest_snapshot.get("key_state") if isinstance(latest_snapshot.get("key_state"), dict) else {}
+    current_goal = str(key_state.get("current_goal") or "").strip()
+    next_step = str(key_state.get("next_step") or "").strip()
+    if current_goal:
+        parts.append(f"Current goal: {current_goal}")
+    if next_step:
+        parts.append(f"Next step: {next_step}")
+    open_loops = latest_snapshot.get("open_loops") or []
+    if open_loops:
+        parts.append("Open loops:\n- " + "\n- ".join([str(item) for item in open_loops]))
+    return "\n\n".join(parts)
+
+
+async def compact_dialogue_bucket(
+    *,
+    db: AsyncSession,
+    session_id: str,
+    older_messages: List[Dict[str, Any]],
+    budget_tokens: int,
+    memory_epoch: Optional[Dict[str, Any]] = None,
+    model: Optional[str] = None,
+    task_registry_snapshot: Optional[Dict[str, Any]] = None,
+    active_task: Optional[Dict[str, Any]] = None,
+    active_step: Optional[Dict[str, Any]] = None,
+    trigger_reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not older_messages or budget_tokens <= 0:
+        return {
+            "block_text": None,
+            "used_tokens": 0,
+            "latest_summary": None,
+            "snapshot": None,
+            "triggered": False,
+            "compaction_id": None,
+            "before_tokens": None,
+            "after_tokens": None,
+        }
+
+    latest_compaction_result = await db.execute(
+        select(ConversationCompaction)
+        .where(ConversationCompaction.session_id == session_id)
+        .order_by(ConversationCompaction.sequence.desc())
+        .limit(1)
+    )
+    latest_compaction = latest_compaction_result.scalar_one_or_none()
+    latest_snapshot = _latest_from_row(latest_compaction, memory_epoch=memory_epoch)
+
+    materialized_messages: List[ChatMessage] = []
+    for index, item in enumerate(older_messages):
+        role = str(item.get("role") or "")
+        content = str(item.get("content") or "")
+        if role not in {"user", "assistant"} or not content:
+            continue
+        materialized_messages.append(
+            ChatMessage(
+                id=str(index),
+                session_id=session_id,
+                role=role,
+                content=content,
+            )
+        )
+
+    if not materialized_messages:
+        return {
+            "block_text": None,
+            "used_tokens": 0,
+            "latest_summary": None,
+            "snapshot": None,
+            "triggered": False,
+            "compaction_id": None,
+            "before_tokens": None,
+            "after_tokens": None,
+        }
+
+    seq_result = await db.execute(
+        select(ConversationCompaction.sequence)
+        .where(ConversationCompaction.session_id == session_id)
+        .order_by(ConversationCompaction.sequence.desc())
+        .limit(1)
+    )
+    last_seq = seq_result.scalar_one_or_none() or 0
+    sequence = last_seq + 1
+    compaction_id = str(uuid.uuid4())
+
+    model_compaction_used = False
+    try:
+        latest_for_new = await _compact_with_main_model(
+            older=materialized_messages,
+            latest_snapshot=latest_snapshot,
+            memory_epoch=memory_epoch,
+            model=model,
+            compaction_id=compaction_id,
+            sequence=sequence,
+        )
+        model_compaction_used = True
+    except Exception:
+        latest_for_new = _build_heuristic_snapshot(
+            older=materialized_messages,
+            sequence=sequence,
+            compaction_id=compaction_id,
+            memory_epoch=memory_epoch,
+        )
+
+    block_text = format_compact_snapshot(latest_for_new)
+    registry_id = str((task_registry_snapshot or {}).get("registry_id") or "").strip()
+    task_goal = str((active_task or {}).get("goal") or "").strip()
+    step_type = str((active_step or {}).get("type") or "").strip()
+    if block_text and (registry_id or task_goal or step_type):
+        header_lines = ["[Task/Step Compact Anchor]"]
+        if registry_id:
+            header_lines.append(f"Registry: {registry_id}")
+        if task_goal:
+            header_lines.append(f"Task Goal: {task_goal}")
+        if step_type:
+            header_lines.append(f"Next Step: {step_type}")
+        block_text = "\n".join(header_lines) + "\n\n" + block_text
+    if block_text:
+        block_text = short_text(block_text, max(240, budget_tokens * 4))
+    used_tokens = estimate_tokens(block_text or "")
+    if used_tokens > budget_tokens and block_text:
+        block_text = short_text(block_text, max(120, budget_tokens * 4))
+        used_tokens = estimate_tokens(block_text)
+
+    key_facts_json = {
+        "bucket_name": "compact_dialogue_bucket",
+        "source_message_ids": [str(item.get("id") or "") for item in older_messages if item.get("id")],
+        "source_token_count": sum(estimate_tokens(str(item.get("content") or "")) for item in older_messages),
+        "compacted_token_count": used_tokens,
+        "task_registry_id": registry_id or None,
+        "task_goal": task_goal or None,
+        "step_type": step_type or None,
+        "memory_snapshot": latest_for_new,
+        "model_compaction_used": model_compaction_used,
+    }
+    db.add(
+        ConversationCompaction(
+            id=compaction_id,
+            session_id=session_id,
+            sequence=sequence,
+            trigger_reason=(
+                str(trigger_reason)
+                if str(trigger_reason or "").strip()
+                else ("bucket_rebalance_model" if model_compaction_used else "bucket_rebalance_fallback")
+            ),
+            before_tokens=key_facts_json["source_token_count"],
+            after_tokens=used_tokens,
+            summary_text=latest_for_new.get("summary") or "",
+            key_facts_json=key_facts_json,
+            open_loops_json={"items": latest_for_new.get("open_loops") or []},
+        )
+    )
+
+    return {
+        "block_text": block_text,
+        "used_tokens": used_tokens,
+        "latest_summary": latest_for_new.get("summary"),
+        "snapshot": latest_for_new,
+        "triggered": True,
+        "compaction_id": compaction_id,
+        "before_tokens": key_facts_json["source_token_count"],
+        "after_tokens": used_tokens,
+    }

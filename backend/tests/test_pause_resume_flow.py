@@ -3,6 +3,7 @@ import json
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.prompts.system_prompts import SystemPrompts
 from app.services.llm_service import llm_service
 from app.services.tools.handlers import initialize_tools
 from app.services.tools.registry import tool_registry
@@ -26,7 +27,24 @@ async def test_pause_and_resume_same_task(monkeypatch: pytest.MonkeyPatch, clien
 
     calls = {"count": 0}
 
-    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None):
+    async def fake_chat_completion(*, messages, model=None, stream=False, tools=None, system_prompt=None, on_stream_delta=None, tool_choice=None, **kwargs):
+        if system_prompt == SystemPrompts.ORCHESTRATOR_SYSTEM_PROMPT:
+            return {
+                "content": json.dumps(
+                    {
+                        "tasks": [
+                            {
+                                "goal": "Continue after the user chooses",
+                                "steps": ["GEN_PARSE"],
+                            }
+                        ],
+                    }
+                ),
+                "tool_calls": [],
+                "model": model or "test-model",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+            }
+
         calls["count"] += 1
         if calls["count"] == 1:
             return {
@@ -94,3 +112,7 @@ async def test_pause_and_resume_same_task(monkeypatch: pytest.MonkeyPatch, clien
     assert second_data.get("paused") is False
     assert "Resumed successfully" in second_data["content"]
     assert calls["count"] >= 2
+    assert second_data["task_registry"]["status"] == "completed"
+    assert second_data["task_registry"]["tasks"][0]["goal"] == "Continue after the user chooses"
+    assert second_data["task_registry"]["tasks"][0]["steps"][0]["type"] == "GEN_PARSE"
+    assert "runtime_bucket" in second_data["budget_meta"]["buckets"]

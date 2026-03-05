@@ -37,6 +37,14 @@ const TASK_STATUS_STYLES: Record<string, string> = {
   completed: 'border-green-600/30 bg-green-50/80 text-green-900',
 };
 
+const REGISTRY_ITEM_STYLES: Record<string, string> = {
+  pending: 'border border-theme-border/20 bg-theme-bg/80 opacity-60',
+  running: 'border border-black/75 bg-theme-surface shadow-[0_2px_10px_rgba(0,0,0,0.08)]',
+  blocked: 'border border-amber-500/35 bg-amber-50/70',
+  completed: 'border border-theme-border/25 bg-theme-surface',
+  cancelled: 'border border-theme-border/25 bg-theme-bg/70 opacity-70',
+};
+
 function formatElapsedLabel(totalSeconds: number): string {
   if (totalSeconds <= 0) return '0s';
   const minutes = Math.floor(totalSeconds / 60);
@@ -57,7 +65,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
     getMessagesForSession,
     isSessionLoading,
     getActiveTask,
-    getTaskBoard,
+    getTaskRegistry,
     getPendingPrompt,
     getSessionReferences,
     removeSessionReference,
@@ -72,7 +80,8 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
   } = useChatStore();
   const { loadPermissionsFromBackend, isSynced } = useSessionStore();
   const messages = getMessagesForSession(sessionId);
-  const taskBoard = getTaskBoard(sessionId);
+  const taskRegistry = getTaskRegistry(sessionId);
+  const registryTasks = taskRegistry?.tasks || [];
   const pendingPrompt = getPendingPrompt(sessionId);
   const sessionReferences = getSessionReferences(sessionId);
   const loading = isSessionLoading(sessionId);
@@ -96,9 +105,16 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const indexWarmupAttemptedRef = useRef<Set<string>>(new Set());
 
-  const totalTasks = taskBoard.length;
-  const completedTasks = taskBoard.filter((item) => item.status === 'completed').length;
-  const runningTasks = taskBoard.filter((item) => item.status === 'running').length;
+  const totalTasks = registryTasks.length;
+  const completedTasks = registryTasks.filter((item) => item.status === 'completed').length;
+  const runningTasks = registryTasks.filter((item) => item.status === 'running').length;
+  const activeRegistryTask = registryTasks.find((task) => task.task_id === taskRegistry?.active_task_id)
+    || registryTasks.find((task) => task.status === 'running' || task.status === 'blocked')
+    || null;
+  const activeRegistryStep = activeRegistryTask?.steps.find((step) => step.status === 'running' || step.status === 'blocked')
+    || (typeof activeRegistryTask?.current_step_index === 'number'
+      ? activeRegistryTask.steps[activeRegistryTask.current_step_index]
+      : undefined);
 
   useWebSocket(sessionId, setConnectionStatus);
 
@@ -316,7 +332,9 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
       return file && getEffectivePermission(file, permissions) === 'read' && summarizeIndexStatus(status).label === 'Index failed';
     })
     .map(([fileId]) => allFiles.find((file) => file.id === fileId)?.name || fileId);
-  const activeTaskMessage = activeTask?.lastMessage || 'Working through the current request.';
+  const activeTaskMessage = activeRegistryTask
+    ? `${activeRegistryTask.goal}${activeRegistryStep ? ` · ${activeRegistryStep.type}` : ''}`
+    : activeTask?.lastMessage || 'Working through the current request.';
 
   return (
     <div
@@ -480,7 +498,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
               <span className="text-[11px] text-theme-text/80 truncate">
                 {completedTasks}/{totalTasks || 0} completed{runningTasks ? ` · ${runningTasks} running` : ''}
               </span>
-              {taskBoard.length === 0 && (
+              {registryTasks.length === 0 && (
                 <span className="text-[10px] uppercase tracking-[0.08em] text-theme-text/38">no tasks</span>
               )}
             </div>
@@ -491,30 +509,76 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
         </button>
 
         {taskBoardExpanded && (
-          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {taskBoard.length === 0 ? (
+          <div className="mt-2 grid grid-cols-1 gap-2">
+            {registryTasks.length === 0 ? (
               <div className="text-xs text-theme-text/45 px-2 py-2 rounded-[16px] border border-dashed border-theme-border/25">
-                No registered tasks yet. Agent will show tasks after calling `register_task`.
+                No task registry yet. The orchestrator will register tasks when the request starts.
               </div>
             ) : (
-              taskBoard.map((item) => (
+              registryTasks
+                .slice()
+                .sort((a, b) => a.task_order - b.task_order)
+                .map((item) => (
                 <div
-                  key={item.id}
-                  className={`group relative rounded-[18px] px-3 py-2 transition-all ${
-                    item.status === 'waiting'
-                      ? 'border border-theme-border/20 bg-theme-bg/80 opacity-60 blur-[0.2px]'
-                      : item.status === 'running'
-                        ? 'border border-black/75 bg-theme-surface shadow-[0_2px_10px_rgba(0,0,0,0.08)]'
-                        : 'border border-theme-border/25 bg-theme-surface'
-                  }`}
+                  key={item.task_id}
+                  className={`rounded-[18px] px-3 py-2 transition-all ${REGISTRY_ITEM_STYLES[item.status] || REGISTRY_ITEM_STYLES.pending}`}
                 >
-                  <div className="text-xs font-semibold text-theme-text/85 truncate">{item.name}</div>
-                  <div className="text-[11px] text-theme-text/55 mt-1 capitalize">{item.status}</div>
-                  {item.status === 'completed' && item.completionSummary && (
-                    <div className="pointer-events-none absolute left-2 right-2 top-full mt-1 rounded-[14px] border border-theme-border/25 bg-theme-bg px-2 py-1 text-[11px] text-theme-text/80 opacity-0 scale-95 group-hover:opacity-100 group-hover:scale-105 transition-all shadow-[0_6px_18px_rgba(0,0,0,0.08)] z-20">
-                      {item.completionSummary}
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-theme-text/85 truncate">{item.goal}</div>
+                      <div className="text-[11px] text-theme-text/55 mt-1 capitalize">
+                        {item.status} · step {Math.min(item.current_step_index + 1, Math.max(item.total_steps, 1))}/{Math.max(item.total_steps, 1)}
+                      </div>
+                    </div>
+                    <div className="text-[10px] uppercase tracking-[0.08em] text-theme-text/42">
+                      {item.task_id.split(':').slice(-1)[0] || item.task_id}
+                    </div>
+                  </div>
+                  {item.blocked_reason && (
+                    <div className="mt-2 rounded-[14px] border border-amber-500/25 bg-amber-50/60 px-2 py-1.5 text-[11px] text-amber-900">
+                      Blocked: {item.blocked_reason}
                     </div>
                   )}
+                  {Array.isArray(item.missing_inputs) && item.missing_inputs.length > 0 && (
+                    <div className="mt-2 space-y-1 text-[11px] text-theme-text/70">
+                      {item.missing_inputs.map((missing, index) => (
+                        <div key={`${item.task_id}-missing-${index}`} className="rounded-[12px] border border-theme-border/16 bg-theme-bg/72 px-2 py-1.5">
+                          <div className="font-medium">{String(missing.input || missing.description || 'missing input')}</div>
+                          {missing.minimum_substitute && (
+                            <div className="text-theme-text/55 mt-0.5">
+                              Minimum substitute: {String(missing.minimum_substitute)}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-2 space-y-1.5">
+                    {item.steps.map((step) => (
+                      <div
+                        key={`${item.task_id}-step-${step.index}`}
+                        className={`rounded-[14px] border px-2.5 py-2 ${
+                          step.status === 'completed'
+                            ? 'border-green-600/18 bg-green-50/55'
+                            : step.status === 'running'
+                              ? 'border-black/20 bg-theme-bg'
+                              : step.status === 'blocked'
+                                ? 'border-amber-500/28 bg-amber-50/60'
+                                : 'border-theme-border/15 bg-theme-bg/70'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="font-medium text-theme-text/82">{step.type}</span>
+                          <span className="uppercase tracking-[0.08em] text-theme-text/48">{step.status}</span>
+                        </div>
+                        {step.output_preview && (
+                          <div className="mt-1 text-[11px] text-theme-text/62 whitespace-pre-wrap line-clamp-4">
+                            {step.output_preview}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))
             )}
