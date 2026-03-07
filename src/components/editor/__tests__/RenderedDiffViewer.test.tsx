@@ -333,4 +333,72 @@ describe('RenderedDiffViewer', () => {
     expect(container.querySelectorAll('img').length).toBeGreaterThanOrEqual(2);
     expect(container.textContent).toContain('chart new');
   });
+
+  it('renders task lists as semantic checkboxes instead of x badges', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'- [ ] unchecked task\n- [x] finished task'}
+        newContent={'- [x] unchecked task\n- [x] finished task\n- [ ] new pending task'}
+        mode="split"
+      />
+    );
+
+    const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(checkboxes.length).toBe(3);
+    expect(checkboxes.every((checkbox) => checkbox.disabled)).toBe(true);
+    expect(checkboxes.some((checkbox) => checkbox.checked)).toBe(true);
+    expect(checkboxes.some((checkbox) => !checkbox.checked)).toBe(true);
+    expect(container.textContent).not.toContain('xunchecked task');
+    expect(container.textContent).not.toContain('xfinished task');
+  });
+
+  it('renders markdown content instead of the empty state when there is no diff', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'---\ntitle: Example\n---\n\n- [ ] unchecked task'}
+        newContent={'---\ntitle: Example\n---\n\n- [ ] unchecked task'}
+        mode="inline"
+      />
+    );
+
+    expect(screen.queryByText('No line changes to review.')).not.toBeInTheDocument();
+    expect(screen.getByText('title')).toBeInTheDocument();
+    const checkbox = container.querySelector('input[type="checkbox"]') as HTMLInputElement | null;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox?.checked).toBe(false);
+  });
+
+  it('lets single-line review units be clicked and keyboard-selected without button bubbling', () => {
+    const onSelectLine = vi.fn();
+    const onApplyLineDecision = vi.fn();
+
+    render(
+      <RenderedDiffViewer
+        oldContent={'old line'}
+        newContent={'new line'}
+        mode="inline"
+        pendingLines={[
+          { id: 'line-1', line_no: 1, old_line: 'old line', new_line: 'new line', decision: 'pending' },
+        ]}
+        onSelectLine={onSelectLine}
+        onApplyLineDecision={onApplyLineDecision}
+      />
+    );
+
+    const unit = screen.getByTestId('diff-review-unit');
+    expect(unit).toHaveAttribute('role', 'button');
+    expect(unit).toHaveAttribute('tabindex', '0');
+
+    fireEvent.click(unit);
+    expect(onSelectLine).toHaveBeenCalledWith('line-1');
+
+    fireEvent.keyDown(unit, { key: 'Enter' });
+    fireEvent.keyDown(unit, { key: ' ' });
+    expect(onSelectLine).toHaveBeenCalledTimes(3);
+
+    onSelectLine.mockClear();
+    fireEvent.click(screen.getByLabelText('Accept line 1'));
+    expect(onApplyLineDecision).toHaveBeenCalledWith('line-1', 'accepted');
+    expect(onSelectLine).not.toHaveBeenCalled();
+  });
 });

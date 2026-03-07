@@ -731,10 +731,6 @@ function renderChildrenBlocks(oldChildren: Content[] = [], newChildren: Content[
 }
 
 function renderListItem(oldItem: ListItem | null, newItem: ListItem | null, key: string) {
-  const checked = typeof newItem?.checked === 'boolean' ? newItem.checked : oldItem?.checked;
-  const oldChecked = typeof oldItem?.checked === 'boolean' ? oldItem.checked : null;
-  const newChecked = typeof newItem?.checked === 'boolean' ? newItem.checked : null;
-  const checkboxChanged = oldChecked !== null && newChecked !== null && oldChecked !== newChecked;
   const children = renderChildrenBlocks(
     (oldItem?.children || []) as Content[],
     (newItem?.children || []) as Content[],
@@ -743,18 +739,53 @@ function renderListItem(oldItem: ListItem | null, newItem: ListItem | null, key:
 
   return (
     <li key={key} className="my-1">
-      {(oldChecked !== null || newChecked !== null) ? (
-        <span className={`mr-2 inline-flex h-4 w-4 items-center justify-center rounded border text-[10px] ${checkboxChanged ? diffStructuralClassName : 'border-theme-border/30 bg-theme-bg/70'}`}>
-          {(checked ? 'x' : '')}
-        </span>
-      ) : null}
-      <div className="inline-flex min-w-0 flex-col gap-1 align-top">{children}</div>
+      {renderListItemContents(oldItem, newItem, children)}
     </li>
+  );
+}
+
+function isTaskListNode(node: List | null | undefined) {
+  return Boolean(node?.type === 'list' && node.children?.some((child) => typeof (child as ListItem | undefined)?.checked === 'boolean'));
+}
+
+function renderTaskListCheckbox(checked: boolean, changed: boolean) {
+  return (
+    <span
+      className={classNames(
+        'mt-1 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-theme-border/30 bg-theme-bg/70',
+        changed && 'border-amber-500/30 bg-amber-500/10'
+      )}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        readOnly
+        disabled
+        tabIndex={-1}
+        className="h-3.5 w-3.5 cursor-default rounded border-theme-border/30 accent-theme-text pointer-events-none"
+      />
+    </span>
+  );
+}
+
+function renderListItemContents(oldItem: ListItem | null, newItem: ListItem | null, children: ReactNode) {
+  const checked = typeof newItem?.checked === 'boolean' ? newItem.checked : oldItem?.checked;
+  const oldChecked = typeof oldItem?.checked === 'boolean' ? oldItem.checked : null;
+  const newChecked = typeof newItem?.checked === 'boolean' ? newItem.checked : null;
+  const isTaskItem = oldChecked !== null || newChecked !== null;
+  const checkboxChanged = oldChecked !== null && newChecked !== null && oldChecked !== newChecked;
+
+  return (
+    <div className="flex min-w-0 items-start gap-2">
+      {isTaskItem ? renderTaskListCheckbox(Boolean(checked), checkboxChanged) : null}
+      <div className="inline-flex min-w-0 flex-col gap-1 align-top">{children}</div>
+    </div>
   );
 }
 
 function renderList(oldNode: any, newNode: any, key: string) {
   const ordered = Boolean(newNode?.ordered ?? oldNode?.ordered);
+  const isTaskList = isTaskListNode(newNode) || isTaskListNode(oldNode);
   const Tag = ordered ? 'ol' : 'ul';
   const parts = diffArrays<ListItem>((oldNode?.children || []) as ListItem[], (newNode?.children || []) as ListItem[], {
     comparator: (left, right) => toString(left) === toString(right) && left.checked === right.checked,
@@ -793,7 +824,7 @@ function renderList(oldNode: any, newNode: any, key: string) {
     items.push(...part.value.map((item, itemIndex) => <div key={`${key}-ins-${index}-${itemIndex}`} className={diffInlineInsertClassName}>{renderListItem(null, item, `${key}-ins-item-${index}-${itemIndex}`)}</div>));
   }
 
-  return <Tag key={key} className={`my-0 ${ordered ? 'list-decimal pl-5' : 'list-disc pl-5'}`}>{items}</Tag>;
+  return <Tag key={key} className={`my-0 ${isTaskList ? 'list-none pl-0' : ordered ? 'list-decimal pl-5' : 'list-disc pl-5'}`}>{items}</Tag>;
 }
 
 function renderBlockquote(oldNode: any, newNode: any, key: string, callout: DiffCalloutMeta | null) {
@@ -1157,7 +1188,11 @@ function DecisionButtons({
     <div className="flex items-center gap-1">
       <button
         type="button"
-        onClick={() => void onApplyLineDecision(target, 'accepted')}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          void onApplyLineDecision(target, 'accepted');
+        }}
         className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-800 transition-colors hover:bg-emerald-500/20"
         aria-label={`Accept ${subject}`}
       >
@@ -1165,7 +1200,11 @@ function DecisionButtons({
       </button>
       <button
         type="button"
-        onClick={() => void onApplyLineDecision(target, 'rejected')}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          void onApplyLineDecision(target, 'rejected');
+        }}
         className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500/10 text-rose-800 transition-colors hover:bg-rose-500/20"
         aria-label={`Reject ${subject}`}
       >
@@ -1218,14 +1257,34 @@ function ReviewAnchor({
   testId?: boolean;
   children: ReactNode;
 }) {
+  const firstLineId = unit.lineIds[0] || null;
+  const isSelected = unitIsSelected(unit, selectedLineId);
+  const isInteractive = Boolean(firstLineId && (onSelectLine || onApplyLineDecision));
+  const selectUnit = () => {
+    if (firstLineId) onSelectLine?.(firstLineId);
+  };
+
   return (
     <div
       data-testid={testId ? 'diff-review-unit' : undefined}
       data-review-unit={unit.kind}
-      className={`group/review relative min-w-0 ${className}`}
-      onMouseEnter={() => {
-        const firstLineId = unit.lineIds[0];
-        if (firstLineId) onSelectLine?.(firstLineId);
+      role={isInteractive ? 'button' : undefined}
+      tabIndex={isInteractive ? 0 : undefined}
+      className={classNames(
+        'group/review relative min-w-0 rounded-md transition-colors',
+        isInteractive && 'cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-theme-border/35',
+        isSelected && 'bg-theme-surface/20 ring-1 ring-theme-border/18',
+        className
+      )}
+      onMouseEnter={selectUnit}
+      onFocus={selectUnit}
+      onClick={selectUnit}
+      onKeyDown={(event) => {
+        if (!isInteractive) return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        selectUnit();
       }}
     >
       {children}
@@ -1291,26 +1350,13 @@ function renderLineUnitsBlock(
 }
 
 function renderListItemBody(oldItem: ListItem | null, newItem: ListItem | null, key: string) {
-  const checked = typeof newItem?.checked === 'boolean' ? newItem.checked : oldItem?.checked;
-  const oldChecked = typeof oldItem?.checked === 'boolean' ? oldItem.checked : null;
-  const newChecked = typeof newItem?.checked === 'boolean' ? newItem.checked : null;
-  const checkboxChanged = oldChecked !== null && newChecked !== null && oldChecked !== newChecked;
   const children = renderChildrenBlocks(
     (oldItem?.children || []) as Content[],
     (newItem?.children || []) as Content[],
     `${key}-children`
   );
 
-  return (
-    <>
-      {(oldChecked !== null || newChecked !== null) ? (
-        <span className={`mr-2 inline-flex h-4 w-4 items-center justify-center rounded border text-[10px] ${checkboxChanged ? diffStructuralClassName : 'border-theme-border/30 bg-theme-bg/70'}`}>
-          {(checked ? 'x' : '')}
-        </span>
-      ) : null}
-      <div className="inline-flex min-w-0 flex-col gap-1 align-top">{children}</div>
-    </>
-  );
+  return renderListItemContents(oldItem, newItem, children);
 }
 
 function renderListReviewItem({
@@ -1366,6 +1412,7 @@ function renderListBlockUnits(
   }
 
   const ordered = Boolean(newList?.ordered ?? oldList?.ordered);
+  const isTaskList = block.kind === 'task_list' || isTaskListNode(newList) || isTaskListNode(oldList);
   const Tag = ordered ? 'ol' : 'ul';
   const oldItems = (oldList?.children || []) as ListItem[];
   const newItems = (newList?.children || []) as ListItem[];
@@ -1479,7 +1526,7 @@ function renderListBlockUnits(
     );
   }
 
-  return <Tag className={`my-0 ${ordered ? 'list-decimal pl-5' : 'list-disc pl-5'}`}>{items}</Tag>;
+  return <Tag className={`my-0 ${isTaskList ? 'list-none pl-0' : ordered ? 'list-decimal pl-5' : 'list-disc pl-5'}`}>{items}</Tag>;
 }
 
 function resolveUnitForNode(block: DiffBlock, node: TableRow | null) {

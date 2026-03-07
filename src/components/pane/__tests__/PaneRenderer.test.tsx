@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PaneRenderer } from '../PaneRenderer';
 
@@ -29,6 +29,7 @@ const m = vi.hoisted(() => ({
   loadFiles: vi.fn(),
   setFileContentStatic: vi.fn(),
   getFileVersionsStatic: vi.fn(),
+  rawEditorChangeSpy: vi.fn(),
 
   apiGetPendingDiffEvent: vi.fn(),
   apiUpdateViewport: vi.fn(),
@@ -146,6 +147,32 @@ vi.mock('../../editor/TiptapMarkdownEditor', () => ({
         }
       >
         editor-run-check
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('../../editor/RawMarkdownEditor', () => ({
+  RawMarkdownEditor: ({
+    content,
+    notice,
+    onChange,
+  }: {
+    content?: string;
+    notice?: string | null;
+    onChange?: (value: string) => void;
+  }) => (
+    <div>
+      <div>RawMarkdownEditor</div>
+      <div>{notice}</div>
+      <div>{content}</div>
+      <button
+        onClick={() => {
+          m.rawEditorChangeSpy();
+          onChange?.('raw editor updated content');
+        }}
+      >
+        raw-editor-change
       </button>
     </div>
   ),
@@ -279,6 +306,7 @@ describe('PaneRenderer', () => {
       success: true,
       data: { final_content: 'final content' },
     });
+    m.rawEditorChangeSpy.mockReset();
   });
 
   it('renders empty pane and handles toolbar actions', () => {
@@ -402,6 +430,9 @@ describe('PaneRenderer', () => {
     );
 
     expect(screen.getByText('RenderedDiffViewer-split')).toBeInTheDocument();
+    expect(within(screen.getByTestId('history-diff-original-pane')).getByText('old')).toBeInTheDocument();
+    expect(within(screen.getByTestId('history-diff-rendered-pane')).getByText('RenderedDiffViewer-split')).toBeInTheDocument();
+    expect(screen.getByTestId('history-diff-original-scroll')).toHaveAttribute('tabindex', '0');
     fireEvent.click(screen.getByText('Accept All'));
 
     await waitFor(() => {
@@ -445,6 +476,93 @@ describe('PaneRenderer', () => {
     );
 
     expect(screen.getByText('SessionView-s-1')).toBeInTheDocument();
+  });
+
+  it('defaults rich no-diff markdown notes to rendered preview and still allows switching back to the editor', async () => {
+    m.getFileContent.mockResolvedValue('---\ntitle: Example\n---\n\n> [!NOTE] Callout body\n\n- [ ] task\n\n| Metric | Value |\n| --- | --- |\n| MMLU | 54.1 |\n\n<div>html</div>\n\nParagraph with footnote[^1].\n\n[^1]: note\n');
+
+    render(
+      <PaneRenderer
+        pane={{
+          id: 'p-raw',
+          activeTabId: 'md-raw',
+          tabs: [{ id: 'md-raw', name: 'raw.md', type: 'md', mode: 'editor' }],
+        }}
+        isActive={true}
+        onActivate={vi.fn()}
+        onDragOver={vi.fn()}
+        onDragLeave={vi.fn()}
+        onDrop={vi.fn()}
+      />
+    );
+
+    const preview = await screen.findByTestId('markdown-preview-scroll');
+    expect(screen.getByText('title')).toBeInTheDocument();
+    expect(screen.getByText('Note')).toBeInTheDocument();
+    expect(screen.getByText('Callout body')).toBeInTheDocument();
+    expect(screen.queryByText('[!NOTE]')).not.toBeInTheDocument();
+    expect(within(preview).getByRole('checkbox')).toBeInTheDocument();
+    expect(screen.queryByText('editor-change')).not.toBeInTheDocument();
+    expect(screen.queryByText('RawMarkdownEditor')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Raw Markdown mode to preserve/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('markdown-preview-edit'));
+    expect(await screen.findByText('editor-change')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('editor-change'));
+    await new Promise((resolve) => setTimeout(resolve, 380));
+
+    await waitFor(() => {
+      expect(m.updateFileContent).toHaveBeenCalledWith('md-raw', 'updated content with enough delta');
+    });
+  });
+
+  it('returns to rendered preview after pending diff resolves for rich markdown notes', async () => {
+    m.getFileContent.mockResolvedValue('---\ntitle: Example\n---\n\n- [ ] task\n\n| Metric | Value |\n| --- | --- |\n| MMLU | 54.1 |\n\n<div>html</div>\n\nParagraph with footnote[^1].\n\n[^1]: note\n');
+    m.apiGetPendingDiffEvent
+      .mockResolvedValueOnce({
+        success: true,
+        data: {
+          event: {
+            id: 'event-rich',
+            old_content: 'old task list',
+            new_content: 'new task list',
+            summary: 'rich markdown pending',
+            lines: [{ id: 'rich-line-1', line_no: 1, old_line: 'old task list', new_line: 'new task list', decision: 'pending' }],
+          },
+        },
+      })
+      .mockResolvedValueOnce({ success: true, data: { event: null } });
+    m.apiUpdateDiffLineDecision.mockResolvedValue({ success: true });
+
+    render(
+      <PaneRenderer
+        pane={{
+          id: 'p-rich',
+          activeTabId: 'md-rich',
+          tabs: [{ id: 'md-rich', name: 'rich.md', type: 'md', mode: 'editor' }],
+        }}
+        isActive={true}
+        onActivate={vi.fn()}
+        onDragOver={vi.fn()}
+        onDragLeave={vi.fn()}
+        onDrop={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('rich markdown pending')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByLabelText('Accept line 1'));
+
+    await waitFor(() => {
+      expect(m.apiUpdateDiffLineDecision).toHaveBeenCalledWith('md-rich', 'event-rich', 'rich-line-1', 'accepted');
+      expect(screen.getByTestId('markdown-preview-scroll')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('editor-change')).not.toBeInTheDocument();
+    expect(screen.queryByText('RawMarkdownEditor')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Raw Markdown mode to preserve/)).not.toBeInTheDocument();
   });
 
   it('applies pending diff finalization actions', async () => {
@@ -581,6 +699,8 @@ describe('PaneRenderer', () => {
     );
 
     expect(screen.getByText('RenderedDiffViewer-split')).toBeInTheDocument();
+    expect(within(screen.getByTestId('history-diff-original-pane')).getByText('old diff')).toBeInTheDocument();
+    expect(within(screen.getByTestId('history-diff-rendered-pane')).getByText('RenderedDiffViewer-split')).toBeInTheDocument();
     expect(screen.queryByText('Inline')).not.toBeInTheDocument();
     expect(screen.queryByText('Split')).not.toBeInTheDocument();
 

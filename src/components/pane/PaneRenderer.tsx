@@ -5,6 +5,8 @@ import { TiptapMarkdownEditor } from '../editor/TiptapMarkdownEditor';
 import { SessionView } from '../session/SessionView';
 import { PDFViewer } from '../pdf/PDFViewer';
 import { RenderedDiffViewer } from '../editor/RenderedDiffViewer';
+import { MarkdownContent } from '../ui/MarkdownContent';
+import { handleScrollableKeyDown } from '../ui/scrollKeyboard';
 import { usePaneStore } from '../../stores/paneStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useFileStore } from '../../stores/apiStore';
@@ -67,6 +69,48 @@ function composePendingDiffContent(
     .join('\n');
 }
 
+function hasFrontmatter(content: string) {
+  return /^(---|\+\+\+)\s*\n[\s\S]*?\n\1(?:\n|$)/.test(content);
+}
+
+function hasTable(content: string) {
+  return /(^|\n)\|?.+\|.+\n\|?\s*:?-{3,}.*\|/m.test(content);
+}
+
+function hasFootnotes(content: string) {
+  return /\[\^[^\]]+\](?::)?/.test(content);
+}
+
+function hasHtml(content: string) {
+  return /<\/?[A-Za-z][\w:-]*(?:\s[^>]*)?>/.test(content);
+}
+
+function hasTaskList(content: string) {
+  return /^\s*[-*+]\s+\[[ xX]\]\s+/m.test(content);
+}
+
+function hasFencedCodeBlock(content: string) {
+  return /(^|\n)(`{3,}|~{3,})/.test(content);
+}
+
+function hasCallout(content: string) {
+  return /^\s*>\s*\[![A-Z]+\]/m.test(content);
+}
+
+function shouldUseRenderedMarkdownPreview(content: string) {
+  if (!content.trim()) return false;
+
+  return (
+    hasFrontmatter(content) ||
+    hasTable(content) ||
+    hasFootnotes(content) ||
+    hasHtml(content) ||
+    hasTaskList(content) ||
+    hasFencedCodeBlock(content) ||
+    hasCallout(content)
+  );
+}
+
 export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLeave, onDrop }: PaneRendererProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [draggedTabInfo, setDraggedTabInfo] = useState<{ sourcePaneId: string; tabId: string } | null>(null);
@@ -79,6 +123,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [pendingDiffLoading, setPendingDiffLoading] = useState(false);
   const [pdfFileUrl, setPdfFileUrl] = useState<string | null>(null);
+  const [markdownDisplayModeByTabId, setMarkdownDisplayModeByTabId] = useState<Record<string, 'editor' | 'preview'>>({});
   const previousContentRef = useRef<string>('');
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<{ fileId: string; fileName: string; content: string } | null>(null);
@@ -531,6 +576,18 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     [pendingDiffEvent]
   );
 
+  const markdownPreviewAvailable = useMemo(
+    () => activeTab?.type === 'md' && shouldUseRenderedMarkdownPreview(fileContent),
+    [activeTab?.type, fileContent]
+  );
+
+  const markdownDisplayMode = useMemo(() => {
+    if (!activeTab || activeTab.type !== 'md') return 'editor' as const;
+    const override = markdownDisplayModeByTabId[activeTab.id];
+    if (override) return override;
+    return markdownPreviewAvailable ? 'preview' as const : 'editor' as const;
+  }, [activeTab, markdownDisplayModeByTabId, markdownPreviewAvailable]);
+
   const acceptedLineCount = useMemo(
     () => diffLines.filter((line) => line.decision === 'accepted' && line.old_line !== line.new_line).length,
     [diffLines]
@@ -727,11 +784,39 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             <div className="flex-1 overflow-hidden relative">
               {activeDiff ? (
                 <>
-                  <RenderedDiffViewer
-                    oldContent={activeDiff.oldContent}
-                    newContent={activeDiff.newContent}
-                    mode="split"
-                  />
+                  <div className="grid h-full min-h-0 grid-cols-2 gap-0 border-t border-theme-border/12">
+                    <section
+                      data-testid="history-diff-original-pane"
+                      className="flex min-h-0 min-w-0 flex-col border-r border-theme-border/20 bg-theme-bg"
+                    >
+                      <div className="border-b border-theme-border/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-theme-text/45">
+                        Original
+                      </div>
+                      <div
+                        className="min-h-0 flex-1 overflow-auto bg-theme-surface/10 px-4 py-3 outline-none"
+                        data-testid="history-diff-original-scroll"
+                        onKeyDown={handleScrollableKeyDown}
+                        tabIndex={0}
+                      >
+                        <MarkdownContent content={activeDiff.oldContent} />
+                      </div>
+                    </section>
+                    <section
+                      data-testid="history-diff-rendered-pane"
+                      className="flex min-h-0 min-w-0 flex-col bg-theme-bg"
+                    >
+                      <div className="border-b border-theme-border/20 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-theme-text/45">
+                        Rendered Diff
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-hidden">
+                        <RenderedDiffViewer
+                          oldContent={activeDiff.oldContent}
+                          newContent={activeDiff.newContent}
+                          mode="split"
+                        />
+                      </div>
+                    </section>
+                  </div>
                   {/* Floating Action Buttons */}
                   <div className="absolute bottom-6 right-6 flex gap-2 shadow-lg rounded-lg overflow-hidden z-10">
                     <button
@@ -836,49 +921,98 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 />
               </div>
             </div>
+          ) : markdownDisplayMode === 'preview' ? (
+            <div data-testid="markdown-preview-pane" className="flex h-full flex-col bg-theme-bg">
+              <div className="flex items-center justify-end border-b border-theme-border/20 px-3 py-2 text-xs text-theme-text/60">
+                <button
+                  type="button"
+                  data-testid="markdown-preview-edit"
+                  onClick={() => {
+                    if (!activeTab || activeTab.type !== 'md') return;
+                    setMarkdownDisplayModeByTabId((current) => ({
+                      ...current,
+                      [activeTab.id]: 'editor',
+                    }));
+                  }}
+                  className="rounded border border-theme-border/25 px-2 py-1 transition-colors hover:bg-theme-text/8"
+                >
+                  Edit Markdown
+                </button>
+              </div>
+              <div
+                className="min-h-0 flex-1 overflow-auto bg-theme-surface/10 px-4 py-3 outline-none"
+                data-testid="markdown-preview-scroll"
+                onKeyDown={handleScrollableKeyDown}
+                tabIndex={0}
+              >
+                <MarkdownContent content={fileContent} />
+              </div>
+            </div>
           ) : (
-            <TiptapMarkdownEditor
-              key={activeTab.id}
-              content={fileContent}
-              onChange={(val) => {
-                if (!activeTab || activeTab.type !== 'md') return;
-                scheduleMarkdownSave(activeTab.id, activeTab.name, val);
-              }}
-              availableSessions={openSessions}
-              defaultSessionId={sessionId || openSessions[0]?.id}
-              sourceFile={
-                activeTab && activeTab.type === 'md'
-                  ? {
-                      id: activeTab.id,
-                      name: activeTab.name,
-                    }
-                  : undefined
-              }
-              onAddReferenceToSession={(targetSessionId, reference) => {
-                addSessionReference(targetSessionId, reference);
-              }}
-              onRunSelectionAction={async ({ action, targetSessionId, markdown }) => {
-                if (!activeTab || activeTab.type !== 'md') return;
-                const prompt =
-                  action === 'fix'
-                    ? `请修正以下选中内容，并给出修正后的 Markdown：\n\n${markdown}`
-                    : `请检查以下选中内容的问题（语法、表达、事实）并给出建议：\n\n${markdown}`;
+            <div className="flex h-full min-h-0 flex-col bg-theme-bg">
+              {markdownPreviewAvailable ? (
+                <div className="flex items-center justify-end border-b border-theme-border/20 px-3 py-2 text-xs text-theme-text/60">
+                  <button
+                    type="button"
+                    data-testid="markdown-preview-open"
+                    onClick={() => {
+                      if (!activeTab || activeTab.type !== 'md') return;
+                      setMarkdownDisplayModeByTabId((current) => ({
+                        ...current,
+                        [activeTab.id]: 'preview',
+                      }));
+                    }}
+                    className="rounded border border-theme-border/25 px-2 py-1 transition-colors hover:bg-theme-text/8"
+                  >
+                    Rendered Preview
+                  </button>
+                </div>
+              ) : null}
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <TiptapMarkdownEditor
+                  key={activeTab.id}
+                  content={fileContent}
+                  onChange={(val) => {
+                    if (!activeTab || activeTab.type !== 'md') return;
+                    scheduleMarkdownSave(activeTab.id, activeTab.name, val);
+                  }}
+                  availableSessions={openSessions}
+                  defaultSessionId={sessionId || openSessions[0]?.id}
+                  sourceFile={
+                    activeTab && activeTab.type === 'md'
+                      ? {
+                          id: activeTab.id,
+                          name: activeTab.name,
+                        }
+                      : undefined
+                  }
+                  onAddReferenceToSession={(targetSessionId, reference) => {
+                    addSessionReference(targetSessionId, reference);
+                  }}
+                  onRunSelectionAction={async ({ action, targetSessionId, markdown }) => {
+                    if (!activeTab || activeTab.type !== 'md') return;
+                    const prompt =
+                      action === 'fix'
+                        ? `请修正以下选中内容，并给出修正后的 Markdown：\n\n${markdown}`
+                        : `请检查以下选中内容的问题（语法、表达、事实）并给出建议：\n\n${markdown}`;
 
-                await sendMessageForSession(
-                  targetSessionId,
-                  prompt,
-                  [activeTab.id],
-                  { activeFileId: activeTab.id, compactMode: 'force' }
-                );
-              }}
-              onViewportChange={({ scrollTop, scrollHeight, visibleUnit, visibleStart, visibleEnd }) => {
-                void handleViewportChange(scrollTop, scrollHeight, currentPage, {
-                  visibleUnit,
-                  visibleStart,
-                  visibleEnd,
-                });
-              }}
-            />
+                    await sendMessageForSession(
+                      targetSessionId,
+                      prompt,
+                      [activeTab.id],
+                      { activeFileId: activeTab.id, compactMode: 'force' }
+                    );
+                  }}
+                  onViewportChange={({ scrollTop, scrollHeight, visibleUnit, visibleStart, visibleEnd }) => {
+                    void handleViewportChange(scrollTop, scrollHeight, currentPage, {
+                      visibleUnit,
+                      visibleStart,
+                      visibleEnd,
+                    });
+                  }}
+                />
+              </div>
+            </div>
           )
         ) : (
           <div className="p-8">
