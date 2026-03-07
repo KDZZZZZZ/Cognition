@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DiffEventDTO } from '../../types';
 import { MarkdownContent } from '../ui/MarkdownContent';
+import { CodeMirrorBlockEditor } from './CodeMirrorBlockEditor';
 import { RawMarkdownEditor } from './RawMarkdownEditor';
 import { TiptapMarkdownEditor } from './TiptapMarkdownEditor';
 import { buildRowsFromContents } from './diffRows';
@@ -881,6 +882,7 @@ function MarkdownBlockSurface({
             <div className="flex items-center gap-2 text-[11px] text-theme-text/48">
               <button
                 type="button"
+                aria-label="Add row"
                 onClick={() => {
                   const width = Math.max(1, parsed.header.length);
                   const nextRows = [...parsed.rows, Array.from({ length: width }, () => '')];
@@ -892,6 +894,7 @@ function MarkdownBlockSurface({
               </button>
               <button
                 type="button"
+                aria-label="Add column"
                 onClick={() => {
                   const nextHeader = [...parsed.header, ''];
                   const nextRows = parsed.rows.map((row) => [...row, '']);
@@ -903,6 +906,7 @@ function MarkdownBlockSurface({
               </button>
               <button
                 type="button"
+                aria-label="Remove last row"
                 disabled={parsed.rows.length === 0}
                 onClick={() => {
                   const nextRows = parsed.rows.slice(0, -1);
@@ -914,6 +918,7 @@ function MarkdownBlockSurface({
               </button>
               <button
                 type="button"
+                aria-label="Remove last column"
                 disabled={parsed.header.length <= 1}
                 onClick={() => {
                   if (parsed.header.length <= 1) return;
@@ -1012,13 +1017,12 @@ function MarkdownBlockSurface({
               placeholder="Language"
               className="w-[180px] rounded-md border border-transparent bg-theme-surface/8 px-2 py-1.5 text-[12px] outline-none focus:border-theme-border/20 focus:bg-theme-bg"
             />
-            <textarea
+            <CodeMirrorBlockEditor
+              autoFocus
               value={parsed.code}
-              onChange={(event) => {
-                onChangeContent(replaceMarkdownBlock(draftContent, block, serializeCodeFence(parsed.fence, parsed.language, event.target.value)));
+              onChange={(value) => {
+                onChangeContent(replaceMarkdownBlock(draftContent, block, serializeCodeFence(parsed.fence, parsed.language, value)));
               }}
-              spellCheck={false}
-              className="min-h-[220px] w-full rounded-xl border border-theme-border/16 bg-theme-surface/10 px-3 py-3 font-mono text-[13px] leading-6 outline-none"
             />
           </div>
         );

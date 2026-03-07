@@ -25,6 +25,8 @@
   },
   "dependencies": {
     "@aarkue/tiptap-math-extension": "^1.4.0",
+    "@codemirror/commands": "^6.10.2",
+    "@codemirror/view": "^6.39.16",
     "@floating-ui/dom": "^1.7.5",
     "@tiptap/core": "^3.18.0",
     "@tiptap/extension-image": "^3.20.0",
@@ -36,6 +38,7 @@
     "@types/diff": "^7.0.2",
     "@types/diff-match-patch": "^1.0.36",
     "@types/react-pdf": "^6.2.0",
+    "@uiw/react-codemirror": "^4.25.7",
     "clsx": "^2.1.1",
     "diff": "^8.0.3",
     "diff-match-patch": "^1.0.5",

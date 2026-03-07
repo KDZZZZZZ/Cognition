@@ -18,6 +18,21 @@ vi.mock('../TiptapMarkdownEditor', () => ({
   ),
 }));
 
+vi.mock('@uiw/react-codemirror', () => ({
+  default: ({
+    value,
+    onChange,
+  }: {
+    value?: string;
+    onChange?: (value: string) => void;
+  }) => (
+    <div data-testid="mock-codemirror">
+      <div>{value}</div>
+      <button onClick={() => onChange?.('const answer = 43;')}>mock-codemirror-change</button>
+    </div>
+  ),
+}));
+
 describe('MarkdownDocumentEditor', () => {
   it('keeps a text block active after the first content change', async () => {
     function Harness() {
@@ -223,6 +238,31 @@ describe('MarkdownDocumentEditor', () => {
     });
   });
 
+  it('edits code blocks through CodeMirror', async () => {
+    const onChange = vi.fn();
+
+    const { container } = render(
+      <MarkdownDocumentEditor
+        fileId="f-code"
+        fileName="code.md"
+        baseContent={'```ts\nconst answer = 42;\n```'}
+        content={'```ts\nconst answer = 42;\n```'}
+        onChange={onChange}
+      />
+    );
+
+    const codeBlock = container.querySelector('[data-block-kind="code"] [role="button"]');
+    expect(codeBlock).toBeTruthy();
+    fireEvent.click(codeBlock!);
+
+    expect(await screen.findByTestId('mock-codemirror')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('mock-codemirror-change'));
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith('```ts\nconst answer = 43;\n```');
+    });
+  });
+
   it('supports removing table rows and columns', async () => {
     function Harness() {
       const initial = `---
@@ -264,6 +304,16 @@ title: Table
       expect(screen.queryByDisplayValue('4')).not.toBeInTheDocument();
       expect(screen.getByDisplayValue('A')).toBeInTheDocument();
       expect(screen.getByDisplayValue('3')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add column' }));
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Remove column 2' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove last column' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Remove column 2' })).not.toBeInTheDocument();
     });
   });
 });
