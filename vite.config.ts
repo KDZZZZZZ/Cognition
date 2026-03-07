@@ -2,6 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://127.0.0.1:8000'
+const wsProxyTarget = proxyTarget.replace(/^http/i, 'ws')
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -11,28 +14,28 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8000',
+        target: wsProxyTarget,
         ws: true,
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://127.0.0.1:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/health': {
-        target: 'http://127.0.0.1:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/docs': {
-        target: 'http://127.0.0.1:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/openapi.json': {
-        target: 'http://127.0.0.1:8000',
+        target: proxyTarget,
         changeOrigin: true,
       },
     },

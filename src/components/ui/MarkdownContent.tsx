@@ -14,7 +14,7 @@ interface MarkdownContentProps {
 export function MarkdownContent({ content, className }: MarkdownContentProps) {
   return (
     <div
-      className={`prose prose-sm max-w-none text-theme-text prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-theme-text prose-p:my-2 prose-p:text-theme-text prose-strong:text-theme-text prose-li:my-1 prose-li:text-theme-text prose-a:text-theme-text prose-blockquote:text-theme-text/72 prose-pre:bg-transparent prose-pre:text-theme-text prose-pre:p-0 prose-code:text-theme-text prose-code:before:content-none prose-code:after:content-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 ${className || ''}`}
+      className={`prose prose-sm max-w-none text-theme-text prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-theme-text prose-p:my-2 prose-p:text-theme-text prose-strong:text-theme-text prose-li:my-1 prose-li:text-theme-text prose-a:text-theme-text prose-blockquote:text-theme-text/72 prose-pre:bg-transparent prose-pre:text-theme-text prose-pre:p-0 prose-code:text-theme-text prose-code:before:content-none prose-code:after:content-none [&_.katex-display]:my-1 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display>.katex]:inline-block [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 ${className || ''}`}
     >
       <ReactMarkdown
         remarkPlugins={[remarkMath, remarkGfm]}

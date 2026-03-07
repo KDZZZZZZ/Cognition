@@ -5,7 +5,7 @@
 import { runtimeConfig } from '../config/runtime';
 
 const API_BASE = runtimeConfig.apiBaseUrl;
-const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'kimi-latest';
+const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'Pro/MiniMaxAI/MiniMax-M2.5';
 
 export const BASE_URL = API_BASE;
 
@@ -26,6 +26,12 @@ export interface FileMetadata {
   url?: string;
   parent_id?: string | null;
   children?: FileMetadata[];
+}
+
+export interface UploadProgressSnapshot {
+  loaded: number;
+  total: number;
+  percent: number;
 }
 
 export interface DocumentChunk {
@@ -286,11 +292,60 @@ class ApiClient {
     return this.get(`/api/v1/files/${query ? `?${query}` : ''}`);
   }
 
-  async uploadFile(file: File, parentId?: string | null): Promise<ApiResponse> {
+  async uploadFile(
+    file: File,
+    parentId?: string | null,
+    options?: {
+      onUploadProgress?: (snapshot: UploadProgressSnapshot) => void;
+    }
+  ): Promise<ApiResponse> {
     const formData = new FormData();
     formData.append('file', file);
     const query = parentId ? `?parent_id=${encodeURIComponent(parentId)}` : '';
-    return this.post(`/api/v1/files/upload${query}`, formData);
+    if (!options?.onUploadProgress) {
+      return this.post(`/api/v1/files/upload${query}`, formData);
+    }
+
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${this.baseUrl}/api/v1/files/upload${query}`);
+      xhr.responseType = 'text';
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        options.onUploadProgress?.({
+          loaded: event.loaded,
+          total: event.total,
+          percent: event.total > 0 ? Math.min(100, Math.round((event.loaded / event.total) * 100)) : 0,
+        });
+      };
+
+      xhr.onerror = () => {
+        resolve({ success: false, error: 'Network error while uploading file' });
+      };
+
+      xhr.onload = () => {
+        const ok = xhr.status >= 200 && xhr.status < 300;
+        const response = {
+          status: xhr.status,
+          statusText: xhr.statusText || '',
+        };
+
+        let payload: unknown = null;
+        const raw = xhr.responseText || '';
+        if (raw) {
+          try {
+            payload = JSON.parse(raw);
+          } catch {
+            payload = raw;
+          }
+        }
+
+        resolve(this.normalizeApiResponse(payload, ok, response));
+      };
+
+      xhr.send(formData);
+    });
   }
 
   async createFolder(name: string, parentId?: string | null): Promise<ApiResponse> {

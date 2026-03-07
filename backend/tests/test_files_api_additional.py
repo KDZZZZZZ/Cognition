@@ -52,9 +52,13 @@ def test_files_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert files_api._bbox_intersects((0, 0, 5, 5), (4, 4, 8, 8)) is True
     assert files_api._bbox_intersects((0, 0, 1, 1), (2, 2, 3, 3)) is False
 
-    snapshots = files_api._build_diff_line_snapshots("a\nb", "a\nc")
+    snapshots = files_api._build_diff_line_snapshots("a\nb", "a\nc\nd")
     assert snapshots[0]["decision"] == LineDecision.ACCEPTED
     assert snapshots[1]["decision"] == LineDecision.PENDING
+    assert snapshots[1]["old_line"] == "b"
+    assert snapshots[1]["new_line"] == "c"
+    assert snapshots[2]["old_line"] is None
+    assert snapshots[2]["new_line"] == "d"
 
     line_rows = [
         type("Line", (), {"line_no": 2, "old_line": "B-old", "new_line": "B-new", "decision": LineDecision.REJECTED}),
@@ -96,9 +100,8 @@ async def test_upload_file_and_listing(
     )
     monkeypatch.setattr(files_api.reader_orchestrator.embedding_provider, "is_enabled", lambda: True)
     monkeypatch.setattr(files_api.vector_store, "enabled", True)
-    monkeypatch.setattr(files_api.llm_service, "supports_embeddings", lambda: True)
-    monkeypatch.setattr(files_api.llm_service, "get_embeddings_batch", AsyncMock(return_value=[[0.1, 0.2]]))
-    monkeypatch.setattr(files_api.vector_store, "add_chunks", AsyncMock(return_value=None))
+    add_chunks = AsyncMock(return_value=None)
+    monkeypatch.setattr(files_api.vector_store, "add_chunks", add_chunks)
     monkeypatch.setattr(files_api.visual_retrieval_service, "ensure_page_assets", AsyncMock(return_value=[]))
     monkeypatch.setattr(
         files_api.reader_orchestrator,
@@ -111,6 +114,7 @@ async def test_upload_file_and_listing(
     assert response.success is True
     file_id = response.data["file_id"]
     assert response.data["type"] == "md"
+    add_chunks.assert_not_called()
 
     listing = await files_api.list_files(tree=False, parent_id=None, db=db_session)
     assert listing.data["count"] >= 1
@@ -152,7 +156,6 @@ async def test_upload_file_rolls_back_when_indexing_fails(
     )
     monkeypatch.setattr(files_api.reader_orchestrator.embedding_provider, "is_enabled", lambda: True)
     monkeypatch.setattr(files_api.vector_store, "enabled", True)
-    monkeypatch.setattr(files_api.llm_service, "supports_embeddings", lambda: False)
     delete_by_file = AsyncMock(return_value=None)
     delete_segment_embeddings = AsyncMock(return_value=None)
     monkeypatch.setattr(files_api.vector_store, "delete_by_file", delete_by_file)

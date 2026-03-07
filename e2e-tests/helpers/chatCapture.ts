@@ -58,13 +58,15 @@ export function installChatCapture(page: Page): ChatCaptureController {
     exchange.responseStatus = response.status();
     exchange.completedAt = new Date().toISOString();
     try {
-      exchange.responseBody = await response.json();
-    } catch {
+      const rawBody = await response.body();
+      const text = rawBody.toString('utf-8');
       try {
-        exchange.responseBody = await response.text();
+        exchange.responseBody = JSON.parse(text);
       } catch {
-        exchange.responseBody = null;
+        exchange.responseBody = text;
       }
+    } catch {
+      exchange.responseBody = null;
     }
   });
 

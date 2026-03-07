@@ -386,7 +386,7 @@ async def _retrieve_context_blocks_single(
 
     candidates: List[Dict[str, Any]] = []
     query_tokens = _tokenize_lexical(query)
-    semantic_failed = False
+    semantic_failed = True
     visual_hits_count = 0
     retrieval_diagnostics: Dict[str, Any] = {
         "text_hits": 0,
@@ -395,52 +395,10 @@ async def _retrieve_context_blocks_single(
         "fallback_flags": [],
     }
 
-    semantic_search_enabled = llm_service.supports_embeddings() and vector_store.enabled
-    if semantic_search_enabled:
-        try:
-            query_embedding = await llm_service.get_embedding(query)
-            for file_id in readable_files:
-                search_results = await vector_store.search(
-                    query_embedding=query_embedding,
-                    n_results=12,
-                    file_id=file_id,
-                )
-                docs = (search_results or {}).get("documents", [[]])[0]
-                metadatas = (search_results or {}).get("metadatas", [[]])[0]
-                distances = (search_results or {}).get("distances", [[]])[0]
-                for index, doc in enumerate(docs):
-                    metadata = metadatas[index] if index < len(metadatas) else {}
-                    distance = distances[index] if index < len(distances) else None
-                    page = metadata.get("page")
-                    score = 1.0 / (1.0 + float(distance)) if distance is not None else 0.5
-                    if active_file_id and metadata.get("file_id") == active_file_id:
-                        score += 0.2
-                    if (
-                        active_file_id
-                        and active_page is not None
-                        and metadata.get("file_id") == active_file_id
-                        and page == active_page
-                    ):
-                        score += 0.4
-                    candidates.append(
-                        {
-                            "file_id": metadata.get("file_id") or file_id,
-                            "page": page,
-                            "chunk_index": metadata.get("chunk_index"),
-                            "content": _to_text(doc),
-                            "score": score,
-                        }
-                    )
-        except Exception as exc:
-            print(f"Warning: Could not perform semantic vector search: {exc}")
-            semantic_failed = True
-    else:
-        semantic_failed = True
-        if llm_service.supports_embeddings() and not vector_store.enabled:
-            retrieval_diagnostics["fallback_flags"].append("vector_store_disabled")
+    if llm_service.supports_embeddings() and not vector_store.enabled:
+        retrieval_diagnostics["fallback_flags"].append("vector_store_disabled")
 
     if not candidates:
-        semantic_failed = True
         for file_id in readable_files:
             chunks_result = await db.execute(
                 select(DocumentChunk)
@@ -572,6 +530,8 @@ async def _retrieve_context_blocks_single(
                 "image_url": hit.get("image_url"),
             }
         )
+    if visual_hits_count:
+        semantic_failed = False
 
     # Unified segment retrieval (md/pdf/web): locate -> local deep read.
     try:
@@ -593,6 +553,8 @@ async def _retrieve_context_blocks_single(
                 "fallback_flags": merged_fallback_flags,
             }
         segment_hits = segment_retrieval.get("hits", [])
+        if segment_hits:
+            semantic_failed = False
         deep_items = await reader_orchestrator.build_deep_read_context(
             db=db,
             hits=segment_hits,

@@ -3,27 +3,29 @@ import { AuditHarness } from './helpers/auditHarness';
 import { expectCitationToPage, expectPendingDiffVisible, expectTaskPath, expectViewportInjected } from './helpers/assertions';
 import { installChatCapture } from './helpers/chatCapture';
 import {
-  bulkUpdatePermissionsApi,
   clickTab,
-  createMarkdownFileApi,
-  createSessionApi,
-  getPendingDiffApi,
+  createItemViaQuickAction,
+  findBackendFileByName,
   openApp,
   openPdfToPage,
   openTreeItem,
   refreshExplorer,
+  resolveSessionId,
   sendChatMessage,
+  setPermissionByFileId,
   updateViewportApi,
+  uploadFilesViaQuickAction,
+  waitForBackendFileByName,
+  waitForFileIndexReady,
   waitForPendingDiffApi,
   waitForTaskBoardVisible,
-  uploadFileApi,
 } from './helpers/sessionSetup';
 import { loadTextbookManifest } from './helpers/tbFixture';
 
 const USE_REAL_LLM = String(process.env.E2E_REAL_LLM || '').toLowerCase() === 'true';
 
 test.describe.configure({ mode: 'serial' });
-test.setTimeout(14 * 60 * 1000);
+test.setTimeout(26 * 60 * 1000);
 
 test('tb_long_scope_notes', async ({ page, request }, testInfo) => {
   test.skip(!USE_REAL_LLM, 'TB audit requires E2E_REAL_LLM=true');
@@ -37,31 +39,39 @@ test('tb_long_scope_notes', async ({ page, request }, testInfo) => {
   try {
     const manifest = await loadTextbookManifest();
     const runId = Date.now();
-    const pdfName = `tb-probability-${runId}.pdf`;
-    const noteName = `tb-notes-${runId}.md`;
-    const sessionName = `tb-session-${runId}`;
-
-    const pdf = await uploadFileApi(request, {
-      filePath: manifest.pdf_path,
-      name: pdfName,
-      mimeType: 'application/pdf',
-    });
-    const note = await createMarkdownFileApi(request, noteName, '# Probability Notes\n\n');
-    const session = await createSessionApi(request, sessionName);
-    await bulkUpdatePermissionsApi(request, session.id, {
-      [pdf.id]: 'read',
-      [note.id]: 'write',
-    });
+    const pdfName = process.env.E2E_TEXTBOOK_SHARED_PDF_NAME || 'tb-probability-shared-ui.pdf';
+    const noteName = `tb-notes-ui-${runId}.md`;
+    const sessionName = `tb-session-ui-${runId}`;
 
     await openApp(page);
     await refreshExplorer(page);
+    let pdf = await findBackendFileByName(request, pdfName);
+    if (!pdf) {
+      await uploadFilesViaQuickAction(page, [
+        {
+          filePath: manifest.pdf_path,
+          name: pdfName,
+          mimeType: 'application/pdf',
+        },
+      ]);
+      pdf = await waitForBackendFileByName(request, pdfName, 180_000);
+    }
+    await createItemViaQuickAction(page, 'New File', noteName);
+    await createItemViaQuickAction(page, 'New Session', sessionName);
+
+    const note = await waitForBackendFileByName(request, noteName);
+    await waitForFileIndexReady(request, pdf.id, 18 * 60_000);
+    const sessionId = await resolveSessionId(page, request, sessionName, 60_000);
+
     await openTreeItem(page, note.name);
     await openPdfToPage(page, pdf.name, manifest.page_sets.long_scope.start_page);
-    await openTreeItem(page, session.name);
-    await clickTab(page, session.id);
+    await openTreeItem(page, sessionName);
+    await clickTab(page, sessionId);
     await waitForTaskBoardVisible(page);
+    await setPermissionByFileId(page, pdf.id, 'Read permission');
+    await setPermissionByFileId(page, note.id, 'Write permission');
     await updateViewportApi(request, {
-      sessionId: session.id,
+      sessionId,
       fileId: pdf.id,
       page: manifest.page_sets.long_scope.start_page,
       visibleUnit: 'page',
@@ -105,7 +115,7 @@ test('tb_long_scope_notes', async ({ page, request }, testInfo) => {
       if (pendingFromToolResult?.result?.data?.event_id) {
         return { id: pendingFromToolResult.result.data.event_id, source: 'tool_result' };
       }
-      const pending = await waitForPendingDiffApi(request, note.id, 45_000);
+      const pending = await waitForPendingDiffApi(request, note.id, 60_000);
       return { id: expectPendingDiffVisible(pending)?.id, source: 'pending_api' };
     }, (pending) => `pending diff event=${pending.id}`);
 
@@ -127,7 +137,7 @@ test('tb_long_scope_notes', async ({ page, request }, testInfo) => {
       return citations.length;
     }, (count) => `citations=${count}`);
 
-    const pending = await getPendingDiffApi(request, note.id).catch(() => null);
+    const pending = await waitForPendingDiffApi(request, note.id, 15_000).catch(() => null);
     if (pending?.event?.id || pendingFromToolResult?.result?.data?.event_id) {
       await openTreeItem(page, note.name);
       await clickTab(page, note.id);

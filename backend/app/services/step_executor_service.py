@@ -24,6 +24,9 @@ TOOL_GROUPS: Dict[str, str] = {
 WRITE_INTENT_HINTS = {
     "write", "写", "写入", "update", "modify", "edit", "append", "笔记", "note", "整理",
 }
+NEGATIVE_WRITE_HINTS = {
+    "不要写", "别写", "不写笔记", "不要修改", "不要写入", "别改",
+}
 
 
 def _tool_name(tool: Dict[str, Any]) -> str:
@@ -33,6 +36,8 @@ def _tool_name(tool: Dict[str, Any]) -> str:
 
 def _has_write_intent(message: str) -> bool:
     lowered = (message or "").lower()
+    if any(token in lowered for token in NEGATIVE_WRITE_HINTS):
+        return False
     return any(token in lowered for token in WRITE_INTENT_HINTS)
 
 

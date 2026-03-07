@@ -23,3 +23,10 @@
 - 当输出会写入 note，且正文出现“图/表/figure/chart/可视化结果”相关内容时，优先把对应图表贴进 note。
 - 先用 `inspect_document_visual` 获取图表证据与 `visual_handle`，再用 `add_file_charts_to_note` 写入；有 handle 时不要只靠 query 重新猜图。
 - 若图表来源不确定或权限不足，必须显式说明缺口，不能编造图表内容。
+- 如果图表资产暂未就绪、视觉检查失败、或贴图工具不可用，先把文字版总结和页码证据写进 note；不能因为贴图失败而跳过本轮 note 写入。
+
+## GR-5 用户明确要求写入 note 时，pending diff 是完成条件
+
+- 当用户明确要求“写入/整理到当前 note”，且当前存在可写 markdown note 时，本轮至少要产出一个 pending diff 才算完成。
+- 只在聊天里复述总结、不调用 editor 工具、不产生 diff，都不算完成写入请求。
+- 如果写入确实被权限、目标缺失或工具不可用阻塞，必须明确说明具体阻塞点，不能假装已经完成。

@@ -39,8 +39,12 @@ from app.schemas import (
     WebImportRequest,
 )
 from app.services.document_parser import parser
-from app.services.diff_events import get_effective_diff_base, resolve_all_pending_diff_events
-from app.services.llm_service import llm_service
+from app.services.diff_events import (
+    build_diff_line_snapshots,
+    compose_content_from_line_snapshots,
+    get_effective_diff_base,
+    resolve_all_pending_diff_events,
+)
 from app.services.multiformat_document_service import reader_orchestrator
 from app.services.visual_retrieval_service import visual_retrieval_service
 from app.services.vector_store import vector_store
@@ -150,26 +154,9 @@ def _build_diff_line_snapshots(old_content: str, new_content: str) -> list[dict]
     """
     Build line-level snapshots from a before/after string pair.
 
-    We keep one row per line index to support deterministic line approval.
+    Rows follow line diff order so inserts and deletes can be reviewed independently.
     """
-    old_lines = old_content.splitlines()
-    new_lines = new_content.splitlines()
-    max_len = max(len(old_lines), len(new_lines))
-
-    snapshots: list[dict] = []
-    for idx in range(max_len):
-        old_line = old_lines[idx] if idx < len(old_lines) else None
-        new_line = new_lines[idx] if idx < len(new_lines) else None
-        decision = LineDecision.PENDING if old_line != new_line else LineDecision.ACCEPTED
-        snapshots.append(
-            {
-                "line_no": idx + 1,
-                "old_line": old_line,
-                "new_line": new_line,
-                "decision": decision,
-            }
-        )
-    return snapshots
+    return build_diff_line_snapshots(old_content, new_content)
 
 
 def _compose_content_from_line_snapshots(snapshots: list[DiffLineSnapshot]) -> str:
@@ -180,16 +167,7 @@ def _compose_content_from_line_snapshots(snapshots: list[DiffLineSnapshot]) -> s
     rejected -> old_line
     pending  -> new_line (finalize should normally resolve pending first)
     """
-    ordered = sorted(snapshots, key=lambda line: line.line_no)
-    final_lines: list[str] = []
-    for line in ordered:
-        if line.decision == LineDecision.REJECTED:
-            chosen = line.old_line
-        else:
-            chosen = line.new_line
-        if chosen is not None:
-            final_lines.append(chosen)
-    return "\n".join(final_lines)
+    return compose_content_from_line_snapshots(snapshots)
 
 
 async def _get_latest_pending_diff_event(db: AsyncSession, file_id: str) -> Optional[DiffEvent]:
@@ -395,11 +373,6 @@ async def upload_file(
             for chunk in chunks:
                 db.add(chunk)
             await db.flush()
-
-            if llm_service.supports_embeddings() and vector_store.enabled:
-                chunk_texts = [chunk.content for chunk in chunks]
-                embeddings = await llm_service.get_embeddings_batch(chunk_texts)
-                await vector_store.add_chunks(chunks, embeddings)
 
         if file_type == "pdf":
             try:
@@ -918,6 +891,19 @@ async def get_file_page_assets(
     file = result.scalar_one_or_none()
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
+
+    file_type = _file_type_to_str(file.file_type).lower()
+    if file_type == "pdf":
+        try:
+            await visual_retrieval_service.ensure_page_assets(
+                db=db,
+                file_id=file_id,
+                page_count_hint=file.page_count,
+                file_path_hint=file.path,
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
 
     query = select(DocumentPageAsset).where(DocumentPageAsset.file_id == file_id)
     if page is not None:

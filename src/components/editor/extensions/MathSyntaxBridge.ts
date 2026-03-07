@@ -18,6 +18,8 @@ interface TopLevelBlock {
   node: ProseMirrorNode;
   pos: number;
   index: number;
+  parent: ProseMirrorNode | null;
+  childIndex: number;
 }
 
 interface SameParagraphDisplayMatch {
@@ -41,10 +43,17 @@ interface InlineMatch {
   latex: string;
 }
 
+interface InlineTextRun {
+  startChildIndex: number;
+  endChildIndex: number;
+  matches: InlineMatch[];
+}
+
 interface InlineParagraphMatch {
   kind: 'inlineParagraph';
   blockIndex: number;
   matches: InlineMatch[];
+  runs: InlineTextRun[];
 }
 
 type BridgeMatch = SameParagraphDisplayMatch | MultilineDisplayMatch | InlineParagraphMatch;
@@ -59,7 +68,7 @@ export const MathSyntaxBridge = Extension.create<MathSyntaxBridgeOptions>({
       neighborRadius: 2,
       enableDisplay: true,
       enableInline: true,
-      maxInitialTransforms: 96,
+      maxInitialTransforms: 256,
     };
   },
 
@@ -203,27 +212,7 @@ export function buildBridgeTransaction(
   }
 
   const block = blocks[match.blockIndex];
-  const text = block.node.textContent;
-  const children: ProseMirrorNode[] = [];
-  let pointer = 0;
-
-  for (const inlineMatch of match.matches) {
-    if (inlineMatch.start > pointer) {
-      children.push(paragraphType.schema.text(text.slice(pointer, inlineMatch.start)));
-    }
-    children.push(
-      inlineMathType.create({
-        latex: inlineMatch.latex,
-        evaluate: 'no',
-        display: 'no',
-      })
-    );
-    pointer = inlineMatch.end;
-  }
-
-  if (pointer < text.length) {
-    children.push(paragraphType.schema.text(text.slice(pointer)));
-  }
+  const children = buildInlineParagraphChildren(block.node, match.runs || [], paragraphType, inlineMathType);
 
   const paragraph = paragraphType.create(null, children.length > 0 ? children : undefined);
   const from = block.pos;
@@ -240,8 +229,19 @@ export function buildBridgeTransaction(
 
 export function collectTopLevelBlocks(doc: ProseMirrorNode): TopLevelBlock[] {
   const blocks: TopLevelBlock[] = [];
-  doc.forEach((node, offset, index) => {
-    blocks.push({ node, pos: offset, index });
+  doc.descendants((node, pos, parent, index) => {
+    if (node.type.name !== 'paragraph') {
+      return true;
+    }
+
+    blocks.push({
+      node,
+      pos,
+      index: blocks.length,
+      parent: parent ?? null,
+      childIndex: typeof index === 'number' ? index : blocks.length,
+    });
+    return true;
   });
   return blocks;
 }
@@ -336,10 +336,20 @@ export function findMultilineDisplayMatch(
     const openBlock = blocks[openIndex];
     if (!isPlainTopLevelParagraph(openBlock, paragraphType)) continue;
     if (openBlock.node.textContent.trim() !== '$$') continue;
+    if (openBlock.parent !== closeBlock.parent) continue;
 
     const between = blocks.slice(openIndex + 1, closeIndex);
     if (between.length === 0) continue;
     if (between.some((item) => !isPlainTopLevelParagraph(item, paragraphType))) continue;
+    if (between.some((item) => item.parent !== openBlock.parent)) continue;
+    if (closeBlock.childIndex - openBlock.childIndex !== between.length + 1) continue;
+    if (
+      between.some(
+        (item, betweenIndex) => item.childIndex !== openBlock.childIndex + betweenIndex + 1
+      )
+    ) {
+      continue;
+    }
 
     const latexRaw = between.map((item) => item.node.textContent).join('\n');
     const latex = latexRaw.trim();
@@ -388,18 +398,17 @@ export function findInlineParagraphMatch(
   paragraphType: NodeType
 ): InlineParagraphMatch | null {
   const block = blocks[index];
-  if (!isPlainTopLevelParagraph(block, paragraphType)) return null;
+  if (block.node.type !== paragraphType) return null;
 
-  const text = block.node.textContent;
-  if (!text.includes('$')) return null;
-
-  const matches = findInlineMatches(text);
-  if (matches.length === 0) return null;
+  const runs = collectInlineTextRuns(block.node);
+  if (!runs || runs.length === 0) return null;
+  const matches = runs.flatMap((run) => run.matches);
 
   return {
     kind: 'inlineParagraph',
     blockIndex: index,
     matches,
+    runs,
   };
 }
 
@@ -414,6 +423,142 @@ export function isPlainTopLevelParagraph(block: TopLevelBlock, paragraphType: No
   }
 
   return true;
+}
+
+export function collectInlineTextRuns(paragraph: ProseMirrorNode): InlineTextRun[] | null {
+  const runs: InlineTextRun[] = [];
+  let startChildIndex = -1;
+  let bufferedText = '';
+
+  const flush = (endChildIndex: number) => {
+    if (startChildIndex < 0 || bufferedText.length === 0) {
+      startChildIndex = -1;
+      bufferedText = '';
+      return;
+    }
+
+    if (bufferedText.includes('$')) {
+      const matches = findInlineMatches(bufferedText);
+      if (matches.length > 0) {
+        runs.push({
+          startChildIndex,
+          endChildIndex,
+          matches,
+        });
+      }
+    }
+
+    startChildIndex = -1;
+    bufferedText = '';
+  };
+
+  for (let i = 0; i < paragraph.childCount; i += 1) {
+    const child = paragraph.child(i);
+    if (child.isText) {
+      if (startChildIndex < 0) startChildIndex = i;
+      bufferedText += child.text || '';
+      continue;
+    }
+
+    flush(i - 1);
+    if (child.type.name !== 'inlineMath') {
+      return null;
+    }
+  }
+
+  flush(paragraph.childCount - 1);
+  return runs;
+}
+
+function buildInlineParagraphChildren(
+  paragraph: ProseMirrorNode,
+  runs: InlineTextRun[],
+  paragraphType: NodeType,
+  inlineMathType: NodeType
+): ProseMirrorNode[] {
+  if (runs.length === 0) {
+    const children: ProseMirrorNode[] = [];
+    paragraph.forEach((child) => {
+      children.push(child);
+    });
+    return children;
+  }
+
+  const children: ProseMirrorNode[] = [];
+  let runIndex = 0;
+
+  for (let childIndex = 0; childIndex < paragraph.childCount; childIndex += 1) {
+    const child = paragraph.child(childIndex);
+    const currentRun = runs[runIndex];
+
+    if (currentRun && childIndex === currentRun.startChildIndex) {
+      const runNodes: ProseMirrorNode[] = [];
+      for (let runChildIndex = currentRun.startChildIndex; runChildIndex <= currentRun.endChildIndex; runChildIndex += 1) {
+        runNodes.push(paragraph.child(runChildIndex));
+      }
+      children.push(...buildInlineRunChildren(runNodes, currentRun.matches, paragraphType, inlineMathType));
+      childIndex = currentRun.endChildIndex;
+      runIndex += 1;
+      continue;
+    }
+
+    children.push(child);
+  }
+
+  return children;
+}
+
+function buildInlineRunChildren(
+  runNodes: ProseMirrorNode[],
+  matches: InlineMatch[],
+  paragraphType: NodeType,
+  inlineMathType: NodeType
+): ProseMirrorNode[] {
+  const children: ProseMirrorNode[] = [];
+  const runLength = runNodes.reduce((sum, node) => sum + ((node.text || '').length), 0);
+  let pointer = 0;
+
+  for (const match of matches) {
+    appendMarkedTextSlice(children, runNodes, pointer, match.start, paragraphType);
+    children.push(
+      inlineMathType.create({
+        latex: match.latex,
+        evaluate: 'no',
+        display: 'no',
+      })
+    );
+    pointer = match.end;
+  }
+
+  appendMarkedTextSlice(children, runNodes, pointer, runLength, paragraphType);
+  return children;
+}
+
+function appendMarkedTextSlice(
+  children: ProseMirrorNode[],
+  runNodes: ProseMirrorNode[],
+  from: number,
+  to: number,
+  paragraphType: NodeType
+) {
+  if (to <= from) return;
+
+  let offset = 0;
+  for (const node of runNodes) {
+    const text = node.text || '';
+    const nodeStart = offset;
+    const nodeEnd = offset + text.length;
+    offset = nodeEnd;
+
+    if (to <= nodeStart || from >= nodeEnd) continue;
+
+    const localStart = Math.max(0, from - nodeStart);
+    const localEnd = Math.min(text.length, to - nodeStart);
+    const slice = text.slice(localStart, localEnd);
+    if (!slice) continue;
+
+    children.push(paragraphType.schema.text(slice, node.marks));
+  }
 }
 
 export function createDisplayParagraph(paragraphType: NodeType, inlineMathType: NodeType, latex: string): ProseMirrorNode {
@@ -525,5 +670,10 @@ export function isEscaped(text: string, index: number): boolean {
 }
 
 export function clampTextSelectionPos(pos: number, doc: ProseMirrorNode): number {
-  return Math.max(1, Math.min(pos, doc.content.size));
+  const clamped = Math.max(1, Math.min(pos, doc.content.size));
+  try {
+    return TextSelection.near(doc.resolve(clamped), 1).from;
+  } catch {
+    return clamped;
+  }
 }

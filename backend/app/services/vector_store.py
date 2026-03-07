@@ -55,29 +55,99 @@ class VectorStore:
                 RuntimeWarning,
             )
 
+    @staticmethod
+    def _documents_collection_metadata() -> Dict[str, Any]:
+        return {"hnsw:space": "cosine"}
+
+    @staticmethod
+    def _segment_collection_metadata() -> Dict[str, Any]:
+        return {
+            "hnsw:space": "cosine",
+            "embedding_model": str(settings.EMBEDDING_MODEL or ""),
+            "embedding_dimensions": int(settings.EMBEDDING_DIMENSIONS or 0),
+        }
+
+    @staticmethod
+    def _is_dimension_mismatch_error(exc: Exception) -> bool:
+        message = str(exc or "").lower()
+        return "dimension" in message and (
+            "collection dimensionality" in message
+            or "dimensionality" in message
+            or "dimensions" in message
+        )
+
+    def _get_or_create_collection(
+        self,
+        *,
+        attr_name: str,
+        name: str,
+        metadata: Dict[str, Any],
+    ):
+        collection = getattr(self, attr_name)
+        if collection is None:
+            collection = self.client.get_or_create_collection(name=name, metadata=metadata)
+            setattr(self, attr_name, collection)
+        return collection
+
+    def _reset_collection(
+        self,
+        *,
+        attr_name: str,
+        name: str,
+        metadata: Dict[str, Any],
+    ):
+        if not self.enabled or self.client is None:
+            raise RuntimeError("ChromaDB vector index is disabled")
+        try:
+            self.client.delete_collection(name=name)
+        except TypeError:
+            self.client.delete_collection(name)
+        except Exception:
+            pass
+        collection = self.client.get_or_create_collection(name=name, metadata=metadata)
+        setattr(self, attr_name, collection)
+        return collection
+
+    def _run_collection_operation(
+        self,
+        *,
+        attr_name: str,
+        name: str,
+        metadata: Dict[str, Any],
+        operation,
+    ):
+        collection = self._get_or_create_collection(attr_name=attr_name, name=name, metadata=metadata)
+        try:
+            return operation(collection)
+        except Exception as exc:
+            if not self._is_dimension_mismatch_error(exc):
+                raise
+            warnings.warn(
+                f"Resetting ChromaDB collection '{name}' due embedding dimension mismatch: {exc}",
+                RuntimeWarning,
+            )
+            collection = self._reset_collection(attr_name=attr_name, name=name, metadata=metadata)
+            return operation(collection)
+
     @property
     def collection(self):
         if not self.enabled or self.client is None:
             raise RuntimeError("ChromaDB vector index is disabled")
-
-        if self._collection is None:
-            self._collection = self.client.get_or_create_collection(
-                name="documents",
-                metadata={"hnsw:space": "cosine"}
-            )
-        return self._collection
+        return self._get_or_create_collection(
+            attr_name="_collection",
+            name="documents",
+            metadata=self._documents_collection_metadata(),
+        )
 
     @property
     def segment_collection(self):
         if not self.enabled or self.client is None:
             raise RuntimeError("ChromaDB vector index is disabled")
-
-        if self._segment_collection is None:
-            self._segment_collection = self.client.get_or_create_collection(
-                name="segment_embeddings",
-                metadata={"hnsw:space": "cosine"}
-            )
-        return self._segment_collection
+        return self._get_or_create_collection(
+            attr_name="_segment_collection",
+            name="segment_embeddings",
+            metadata=self._segment_collection_metadata(),
+        )
 
     async def add_chunks(self, chunks: List[DocumentChunk], embeddings: List[List[float]]):
         """Add document chunks with their embeddings to the vector store."""
@@ -98,11 +168,16 @@ class VectorStore:
             for chunk in chunks
         ]
 
-        self.collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
+        self._run_collection_operation(
+            attr_name="_collection",
+            name="documents",
+            metadata=self._documents_collection_metadata(),
+            operation=lambda collection: collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas,
+            ),
         )
 
     async def search(
@@ -127,10 +202,15 @@ class VectorStore:
         if page is not None:
             where["page"] = page
 
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-            where=where if where else None
+        results = self._run_collection_operation(
+            attr_name="_collection",
+            name="documents",
+            metadata=self._documents_collection_metadata(),
+            operation=lambda collection: collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                where=where if where else None,
+            ),
         )
 
         return results
@@ -159,11 +239,16 @@ class VectorStore:
         """Add segment embeddings (text/image/fused) for multimodal retrieval."""
         if not self.enabled or not ids:
             return
-        self.segment_collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=[self._sanitize_metadata(metadata) for metadata in metadatas],
+        self._run_collection_operation(
+            attr_name="_segment_collection",
+            name="segment_embeddings",
+            metadata=self._segment_collection_metadata(),
+            operation=lambda collection: collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=[self._sanitize_metadata(metadata) for metadata in metadatas],
+            ),
         )
 
     @staticmethod
@@ -226,10 +311,15 @@ class VectorStore:
             modalities=modalities,
             source_types=source_types,
         )
-        return self.segment_collection.query(
-            query_embeddings=[query_embedding],
-            n_results=n_results,
-            where=where,
+        return self._run_collection_operation(
+            attr_name="_segment_collection",
+            name="segment_embeddings",
+            metadata=self._segment_collection_metadata(),
+            operation=lambda collection: collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                where=where,
+            ),
         )
 
     async def delete_segment_embeddings_by_file(self, file_id: str):
@@ -298,6 +388,8 @@ class VectorStore:
         """Clear all data from the vector store."""
         if self.enabled and self.client is not None:
             self.client.reset()
+            self._collection = None
+            self._segment_collection = None
 
 
 vector_store = VectorStore()

@@ -25,6 +25,7 @@ from app.services.context_pack_service import (
     build_context_pack as build_context_pack_service,
     build_task_registry_context_pack,
 )
+from app.services.executor_prompt_service import resolve_runtime_writeback_requirement
 from app.services.orchestrator_service import orchestrate_request
 from app.services.llm_service import llm_service
 from app.services.retrieval_service import (
@@ -109,6 +110,13 @@ FORCED_TOOL_NAME_PRIORITY = (
     "add_file_charts_to_note",
     "delete_block",
 )
+EDITOR_WRITE_TOOLS = {
+    "update_file",
+    "update_block",
+    "insert_block",
+    "delete_block",
+    "add_file_charts_to_note",
+}
 
 
 class TaskCancelledError(Exception):
@@ -309,6 +317,64 @@ def _action_kind_for_tool(tool_name: str) -> str:
     if tool in {"pause_for_user_choice"}:
         return "pause"
     return "other"
+
+
+def _writable_markdown_file_ids(
+    *,
+    permissions: Dict[str, str],
+    permitted_files_info: Dict[str, Dict[str, str]],
+) -> List[str]:
+    out: List[str] = []
+    for file_id, perm in (permissions or {}).items():
+        if perm != "write":
+            continue
+        if str((permitted_files_info.get(file_id) or {}).get("type") or "") != "md":
+            continue
+        out.append(file_id)
+    return out
+
+
+def _has_pending_writeback_diff(
+    *,
+    tool_results: List[Dict[str, Any]],
+    writable_note_ids: List[str],
+) -> bool:
+    writable_note_set = set(writable_note_ids)
+    for item in tool_results:
+        if str(item.get("tool") or "") not in EDITOR_WRITE_TOOLS:
+            continue
+        result = item.get("result") if isinstance(item.get("result"), dict) else {}
+        if result.get("success") is not True:
+            continue
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        event_id = str(data.get("event_id") or "").strip()
+        status = str(data.get("status") or "").strip().lower()
+        file_id = str(data.get("file_id") or "").strip()
+        if not event_id or status not in {"pending", "created"}:
+            continue
+        if writable_note_set and file_id and file_id not in writable_note_set:
+            continue
+        return True
+    return False
+
+
+def _build_writeback_blocked_markdown(
+    *,
+    step_type: str,
+    writable_note_ids: List[str],
+    permitted_files_info: Dict[str, Dict[str, str]],
+) -> str:
+    note_names = [
+        str((permitted_files_info.get(file_id) or {}).get("name") or file_id)
+        for file_id in writable_note_ids
+    ]
+    targets = ", ".join(note_names) if note_names else "当前可写 note"
+    return (
+        f"当前 step `{step_type}` 没有完成写回要求。\n\n"
+        f"用户明确要求把结果写入 {targets}，并生成 pending diff，但本轮没有任何 editor 工具真正产出 diff。\n\n"
+        "这不是已完成写入，只是聊天回答或只读检索。请继续直到产生至少一个 pending diff；"
+        "如果确实被权限、目标文件或工具故障阻塞，必须明确说明具体阻塞点。"
+    )
 
 
 def _append_unique_citations(
@@ -1885,6 +1951,19 @@ async def _execute_task_registry_flow(
         model_round = 0
         max_tool_rounds = max_tool_rounds_default
         step_content = ""
+        writable_note_ids = _writable_markdown_file_ids(
+            permissions=session.permissions or {},
+            permitted_files_info=permitted_files_info,
+        )
+        writeback_requirement = resolve_runtime_writeback_requirement(
+            step_definition=step_definition,
+            current_user_message=current_user_message,
+            permissions=session.permissions or {},
+            permitted_files_info=permitted_files_info,
+            tools=step_tools if use_tools else [],
+        )
+        pending_diff_required = writeback_requirement.get("runtime_requirement") == "pending_diff_required"
+        writeback_recovery_used = False
         force_tool_call_requested = (
             bool(use_tools)
             and bool(step_tools)
@@ -1941,9 +2020,13 @@ async def _execute_task_registry_flow(
                 )
 
             desired_tool_choice: Any = (
-                forced_tool_choice
-                if (force_tool_call_requested and model_round == 0 and use_tools and step_tools)
-                else "auto"
+                "required"
+                if (pending_diff_required and writeback_recovery_used and use_tools and step_tools)
+                else (
+                    forced_tool_choice
+                    if (force_tool_call_requested and model_round == 0 and use_tools and step_tools)
+                    else "auto"
+                )
             )
             tool_choice_candidates: List[Any] = [desired_tool_choice]
             if desired_tool_choice != "required":
@@ -2045,6 +2128,29 @@ async def _execute_task_registry_flow(
                     force_tool_bootstrap_used = True
                     round_tool_calls = [forced_call]
             if not use_tools or not round_tool_calls:
+                if (
+                    pending_diff_required
+                    and use_tools
+                    and bool(step_tools)
+                    and not _has_pending_writeback_diff(
+                        tool_results=tool_results,
+                        writable_note_ids=writable_note_ids,
+                    )
+                    and not writeback_recovery_used
+                ):
+                    writeback_recovery_used = True
+                    transient_messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Writeback contract unsatisfied. "
+                                "Before this step can finish, you must call editor tools and create at least one "
+                                "pending diff on a writable markdown note. "
+                                "Do not stop with chat-only text or reader-only work."
+                            ),
+                        }
+                    )
+                    continue
                 break
             if model_round >= max_tool_rounds:
                 step_content = (step_content + "\n\n[Agent reached max tool rounds for this step.]").strip()
@@ -2300,6 +2406,70 @@ async def _execute_task_registry_flow(
         if visible_output:
             latest_user_facing_output = visible_output
             combined_outputs.append(visible_output)
+
+        if pending_diff_required and not _has_pending_writeback_diff(
+            tool_results=tool_results,
+            writable_note_ids=writable_note_ids,
+        ):
+            blocked_markdown = _build_writeback_blocked_markdown(
+                step_type=step_type,
+                writable_note_ids=writable_note_ids,
+                permitted_files_info=permitted_files_info,
+            )
+            await mark_step_blocked(
+                db=db,
+                registry=registry_row,
+                task=task_row,
+                step=step_row,
+                reason="writeback_contract_unsatisfied",
+                missing_inputs=[
+                    {
+                        "input": "pending_diff_writeback",
+                        "description": "This step required a pending diff on a writable markdown note, but no editor tool produced one.",
+                        "minimum_substitute": "Call update_file/update_block/insert_block/add_file_charts_to_note on the writable note and create a pending diff before finishing the step.",
+                    }
+                ],
+                output_markdown=blocked_markdown,
+                output_json={
+                    "step_type": step_type,
+                    "reason": "writeback_contract_unsatisfied",
+                    "budget_meta": budget_meta,
+                    "compact_meta": compact_meta,
+                },
+            )
+            blocked_snapshot = await get_registry_snapshot(db, registry_id)
+            await _emit_task_event(
+                db=db,
+                session_id=session_id,
+                task_id=registry_id,
+                event_type="step_blocked",
+                stage="blocked",
+                message=f"Step blocked: {step_type} missing pending diff writeback",
+                progress=None,
+                status="blocked",
+                payload=_task_registry_event_payload(
+                    blocked_snapshot,
+                    active_task=active_task,
+                    active_step=active_step,
+                    extra={"reason": "writeback_contract_unsatisfied"},
+                ),
+            )
+            return {
+                "paused": False,
+                "failed": False,
+                "blocked": True,
+                "content": blocked_markdown,
+                "tool_results": tool_results,
+                "citations": citations,
+                "budget_meta": budget_meta,
+                "compact_meta": compact_meta,
+                "retrieval_meta": retrieval_meta,
+                "execution_meta": execution_meta,
+                "compact_phase": compact_phase,
+                "task_registry": blocked_snapshot,
+                "awaiting_user_input": None,
+                "response": last_response,
+            }
 
         current_task_id = task_row.id
         _, next_task_row, next_step_row = await complete_step(
@@ -2869,10 +3039,11 @@ async def _chat_completion_task_registry(request: ChatRequest, db: AsyncSession)
                     "role": "assistant",
                     "timestamp": assistant_message.timestamp.isoformat(),
                 "tool_calls": assistant_message.tool_calls,
-                "tool_results": execution.get("tool_results"),
+                    "tool_results": execution.get("tool_results"),
                     "citations": execution.get("citations"),
                     "task_id": registry_id,
                     "paused": False,
+                    "blocked": bool(execution.get("blocked")),
                     "cancelled": False,
                     "failed": False,
                     "task_registry": execution.get("task_registry"),

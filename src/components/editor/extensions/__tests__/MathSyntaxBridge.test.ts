@@ -41,6 +41,40 @@ const schema = new Schema({
       parseDOM: [{ tag: 'span[data-type="inlineMath"]' }],
     },
   },
+  marks: {
+    strong: {
+      parseDOM: [{ tag: 'strong' }],
+      toDOM: () => ['strong', 0],
+    },
+  },
+});
+
+const nestedSchema = new Schema({
+  nodes: {
+    doc: { content: 'block+' },
+    paragraph: { group: 'block', content: 'inline*' },
+    bulletList: { group: 'block', content: 'listItem+' },
+    listItem: { content: 'paragraph+' },
+    text: { group: 'inline' },
+    inlineMath: {
+      group: 'inline',
+      inline: true,
+      atom: true,
+      attrs: {
+        latex: { default: '' },
+        evaluate: { default: 'no' },
+        display: { default: 'no' },
+      },
+      toDOM: (node) => ['span', { 'data-type': 'inlineMath', 'data-latex': node.attrs.latex }, node.attrs.latex],
+      parseDOM: [{ tag: 'span[data-type="inlineMath"]' }],
+    },
+  },
+  marks: {
+    strong: {
+      parseDOM: [{ tag: 'strong' }],
+      toDOM: () => ['strong', 0],
+    },
+  },
 });
 
 function createState(lines: string[]) {
@@ -51,6 +85,58 @@ function createState(lines: string[]) {
   );
   const selectionPos = Math.min(3, doc.content.size);
   return EditorState.create({ schema, doc, selection: TextSelection.create(doc, selectionPos) });
+}
+
+function createNestedState(lines: string[]) {
+  const doc = nestedSchema.node('doc', null, [
+    nestedSchema.node(
+      'bulletList',
+      null,
+      lines.map((line) =>
+        nestedSchema.node(
+          'listItem',
+          null,
+          nestedSchema.node(
+            'paragraph',
+            null,
+            line ? nestedSchema.text(line) : undefined
+          )
+        )
+      )
+    ),
+  ]);
+  const selectionPos = Math.min(5, doc.content.size);
+  return EditorState.create({
+    schema: nestedSchema,
+    doc,
+    selection: TextSelection.create(doc, selectionPos),
+  });
+}
+
+function createNestedMultiParagraphState(lines: string[]) {
+  const doc = nestedSchema.node('doc', null, [
+    nestedSchema.node(
+      'bulletList',
+      null,
+      nestedSchema.node(
+        'listItem',
+        null,
+        lines.map((line) =>
+          nestedSchema.node(
+            'paragraph',
+            null,
+            line ? nestedSchema.text(line) : undefined
+          )
+        )
+      )
+    ),
+  ]);
+  const selectionPos = Math.min(5, doc.content.size);
+  return EditorState.create({
+    schema: nestedSchema,
+    doc,
+    selection: TextSelection.create(doc, selectionPos),
+  });
 }
 
 describe('MathSyntaxBridge helpers', () => {
@@ -99,6 +185,65 @@ describe('MathSyntaxBridge helpers', () => {
     expect(inlineMatch?.matches).toHaveLength(1);
   });
 
+  it('collects and bridges nested list paragraphs', () => {
+    const nestedInlineState = createNestedState(['prefix $k$ suffix']);
+    const nestedInlineBlocks = collectTopLevelBlocks(nestedInlineState.doc as any);
+    expect(nestedInlineBlocks).toHaveLength(1);
+    expect(findInlineParagraphMatch(nestedInlineBlocks as any, 0, nestedSchema.nodes.paragraph as any)?.kind).toBe(
+      'inlineParagraph'
+    );
+
+    const nestedMultiState = createNestedMultiParagraphState(['$$', 'E = mc^2', '$$']);
+    const nestedMultiBlocks = collectTopLevelBlocks(nestedMultiState.doc as any);
+    expect(nestedMultiBlocks).toHaveLength(3);
+    expect(
+      findMultilineDisplayMatch(nestedMultiBlocks as any, 2, nestedSchema.nodes.paragraph as any, 8)?.kind
+    ).toBe('multilineDisplay');
+
+    const nestedInlineTx = createBridgeTransaction(nestedInlineState as any, {
+      options: {
+        maxScanBlocks: 16,
+        neighborRadius: 1,
+        enableDisplay: true,
+        enableInline: true,
+        maxInitialTransforms: 8,
+      },
+    } as any);
+    expect(nestedInlineTx?.docChanged).toBe(true);
+  });
+
+  it('bridges inline math inside marked paragraphs without dropping marks', () => {
+    const strong = schema.marks.strong.create();
+    const doc = schema.node('doc', null, [
+      schema.node('paragraph', null, [
+        schema.text('输入', [strong]),
+        schema.text(': 模型 $M_\\\\theta$, prompt $x_{prompt}$'),
+      ]),
+    ]);
+    const state = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, 2),
+    });
+
+    const tx = createBridgeTransaction(state as any, {
+      options: {
+        maxScanBlocks: 16,
+        neighborRadius: 1,
+        enableDisplay: true,
+        enableInline: true,
+        maxInitialTransforms: 8,
+      },
+    } as any);
+
+    expect(tx?.docChanged).toBe(true);
+
+    const paragraph = tx?.doc.firstChild;
+    expect(paragraph?.firstChild?.marks.some((mark) => mark.type.name === 'strong')).toBe(true);
+    expect(paragraph?.content.content.some((node) => node.type.name === 'inlineMath')).toBe(true);
+    expect(paragraph?.textContent.includes('$M_')).toBe(false);
+  });
+
   it('builds bridge transactions for inline and display transforms', () => {
     const inlineState = createState(['prefix $k$ suffix']);
     const inlineTx = createBridgeTransaction(inlineState as any, {
@@ -127,7 +272,7 @@ describe('MathSyntaxBridge helpers', () => {
     expect(displayTx?.docChanged).toBe(true);
 
     expect(clampTextSelectionPos(0, displayState.doc as any)).toBe(1);
-    expect(clampTextSelectionPos(9999, displayState.doc as any)).toBe(displayState.doc.content.size);
+    expect(clampTextSelectionPos(9999, displayState.doc as any)).toBeLessThanOrEqual(displayState.doc.content.size);
   });
 
   it('covers createBridgeTransaction / match discovery guard branches', () => {

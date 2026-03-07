@@ -375,6 +375,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
 
         <div className="mt-1.5">
           <button
+            data-testid="session-context-toggle"
             type="button"
             onClick={() => setContextPanelExpanded((prev) => !prev)}
             className="w-full rounded-lg border border-theme-border/18 bg-theme-bg/76 px-2.5 py-1.5 text-left shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition-colors hover:bg-theme-bg/92"
@@ -488,8 +489,10 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
       {/* Task Board */}
       <div className="px-4 py-1.5 border-b border-theme-border/20 paper-divider-dashed bg-theme-bg/55 flex-shrink-0">
         <button
+          data-testid="session-task-board-toggle"
           onClick={() => setTaskBoardExpanded((prev) => !prev)}
           className="w-full text-left border border-theme-border/20 rounded-[16px] px-2.5 py-1.5 bg-theme-bg/88 hover:bg-theme-bg transition-colors"
+          aria-expanded={taskBoardExpanded}
         >
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 min-w-0">
@@ -649,7 +652,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
         )}
 
         {pendingPrompt && (
-          <div className="border border-amber-300/60 rounded-xl bg-amber-50/70 px-3 py-3 text-xs text-theme-text/90 shadow-[0_8px_18px_rgba(193,115,54,0.08)]">
+          <div data-testid="session-paused-prompt" className="border border-amber-300/60 rounded-xl bg-amber-50/70 px-3 py-3 text-xs text-theme-text/90 shadow-[0_8px_18px_rgba(193,115,54,0.08)]">
             <div className="font-semibold text-[12px] mb-2">Task paused · choose to continue</div>
             <div className="text-sm mb-2">{pendingPrompt.prompt.question}</div>
             <div className="space-y-1 mb-2">
@@ -691,6 +694,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
             )}
 
             <button
+              data-testid="session-continue-task"
               onClick={() => {
                 const hasOther = promptOtherText.trim().length > 0;
                 void answerTaskPrompt(sessionId, pendingPrompt.taskId, {
@@ -947,6 +951,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
             </div>
           )}
           <textarea
+            data-testid="session-message-input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -956,6 +961,7 @@ export function SessionView({ sessionId, allFiles, permissions, onTogglePermissi
             disabled={loading || isTaskActive}
           />
           <button
+            data-testid="session-send-button"
             onClick={handleSend}
             disabled={loading || isTaskActive || !input.trim()}
             className="absolute right-2 bottom-2 p-1.5 text-theme-text hover:bg-theme-text/10 rounded pill-button disabled:opacity-50 disabled:cursor-not-allowed"

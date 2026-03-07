@@ -22,9 +22,10 @@ def test_supports_embeddings_and_vision(monkeypatch: pytest.MonkeyPatch):
     service = _make_service()
 
     monkeypatch.setattr(settings, "EMBEDDING_MODEL", "text-embedding-v3", raising=False)
+    monkeypatch.setattr(settings, "SILICONFLOW_API_KEY", "", raising=False)
     monkeypatch.setattr(settings, "OPENAI_BASE_URL", "https://api.deepseek.com", raising=False)
     monkeypatch.setattr(settings, "MOONSHOT_BASE_URL", "", raising=False)
-    monkeypatch.setattr(settings, "DEFAULT_MODEL", "kimi-latest", raising=False)
+    monkeypatch.setattr(settings, "DEFAULT_MODEL", "Pro/MiniMaxAI/MiniMax-M2.5", raising=False)
 
     assert service.supports_embeddings() is False
     assert service.supports_vision() is False
@@ -38,7 +39,8 @@ def test_supports_embeddings_and_vision(monkeypatch: pytest.MonkeyPatch):
     assert service.supports_embeddings("text-embedding-v3") is True
 
     assert service.supports_vision("text-embedding-v3") is False
-    assert service.supports_vision("gpt-4o-mini") is True
+    assert service.supports_vision("gpt-4o-mini") is False
+    assert service.supports_vision("deepseek-ai/DeepSeek-OCR") is True
 
 
 @pytest.mark.asyncio

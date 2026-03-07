@@ -75,9 +75,29 @@ describe('App', () => {
     render(<App />);
 
     expect(screen.getByText('SidebarMock')).toBeInTheDocument();
+    expect(screen.getByTestId('desktop-sidebar-shell')).toBeInTheDocument();
+    expect(screen.queryByTestId('mobile-sidebar-shell')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Pane-p2'));
     expect(setUiActivePane).toHaveBeenCalledWith('p2');
     expect(setPaneStoreActivePane).toHaveBeenCalledWith('p2');
+  });
+
+  it('uses the mobile sidebar shell on narrow viewports', () => {
+    vi.mocked(window.matchMedia).mockImplementation((query: string) => ({
+      matches: query === '(max-width: 960px)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    render(<App />);
+
+    expect(screen.getByTestId('mobile-sidebar-shell')).toBeInTheDocument();
+    expect(screen.queryByTestId('desktop-sidebar-shell')).not.toBeInTheDocument();
   });
 
   it('toggles sidebar from toolbar button', () => {

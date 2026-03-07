@@ -32,6 +32,11 @@ class FakeCollection:
         self.delete_calls.append(kwargs)
 
 
+class DimensionMismatchCollection(FakeCollection):
+    def add(self, **kwargs):
+        raise ValueError("Embedding dimension 1024 does not match collection dimensionality 2048")
+
+
 def _make_store(enabled: bool = True):
     store = VectorStore.__new__(VectorStore)
     store.client = object() if enabled else None
@@ -123,6 +128,30 @@ async def test_segment_embedding_paths():
 
     await store.delete_segment_embeddings_by_file("f1")
     assert segments.delete_calls[0]["ids"] == ["s1"]
+
+
+@pytest.mark.asyncio
+async def test_segment_embedding_dimension_mismatch_resets_collection():
+    store = _make_store(enabled=True)
+    stale = DimensionMismatchCollection()
+    fresh = FakeCollection()
+    deleted = []
+    store._segment_collection = stale
+    store.client = SimpleNamespace(
+        delete_collection=lambda name=None: deleted.append(name),
+        get_or_create_collection=lambda name, metadata: fresh,
+    )
+
+    await store.add_segment_embeddings(
+        ids=["s1"],
+        embeddings=[[0.1, 0.2]],
+        documents=["seg text"],
+        metadatas=[{"file_id": "f1", "modality": "text"}],
+    )
+
+    assert deleted == ["segment_embeddings"]
+    assert store._segment_collection is fresh
+    assert fresh.add_calls[0]["ids"] == ["s1"]
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ const rawScenarios = String(process.env.E2E_AUDIT_SCENARIOS || '').trim();
 const SCENARIO_SPEC_MAP = {
   full_flow: 'e2e-tests/full-flow-audit.spec.ts',
   paper_summary_note: 'e2e-tests/agent-paper-summary.audit.spec.ts',
+  paper_local_collection: 'e2e-tests/agent-paper-local-collection.audit.spec.ts',
   tb_long_scope_notes: 'e2e-tests/agent-tb-long-scope.audit.spec.ts',
   tb_qa_validate: 'e2e-tests/agent-tb-qa-validate.audit.spec.ts',
   tb_pending_diff_effective_note: 'e2e-tests/agent-tb-pending-diff.audit.spec.ts',

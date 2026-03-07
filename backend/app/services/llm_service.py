@@ -10,10 +10,12 @@ from app.config import settings
 
 class LLMService:
     """
-    LLM service with OpenAI-compatible default routing.
+    LLM service with OpenAI-compatible routing.
 
-    Default chat/embedding path:
-    - OPENAI_API_KEY + OPENAI_BASE_URL (DashScope-compatible by default)
+    Preferred provider order:
+    - SiliconFlow
+    - OPENAI_API_KEY / OPENAI_BASE_URL
+    - Moonshot legacy fallback
     """
 
     def __init__(self):
@@ -22,11 +24,14 @@ class LLMService:
         self.deepseek_client: Optional[AsyncOpenAI] = None
         self.anthropic_client: Optional[AsyncAnthropic] = None
 
-        primary_api_key = settings.MOONSHOT_API_KEY or settings.OPENAI_API_KEY
-        primary_base_url = settings.OPENAI_BASE_URL or settings.MOONSHOT_BASE_URL
+        primary_api_key = settings.SILICONFLOW_API_KEY or settings.OPENAI_API_KEY or settings.MOONSHOT_API_KEY
+        primary_base_url = (
+            settings.SILICONFLOW_BASE_URL
+            if settings.SILICONFLOW_API_KEY
+            else (settings.OPENAI_BASE_URL or settings.MOONSHOT_BASE_URL)
+        )
 
         if primary_api_key:
-            # Default chain: OpenAI-compatible API endpoint (Kimi by default).
             self.openai_compatible_client = self._create_openai_client(
                 api_key=primary_api_key,
                 base_url=primary_base_url,
@@ -54,38 +59,79 @@ class LLMService:
             kwargs["base_url"] = base_url
         return AsyncOpenAI(**kwargs)
 
+    @staticmethod
+    def _normalized_model_name(model: Optional[str]) -> str:
+        return str(model or "").strip().lower()
+
+    def _primary_api_base(self) -> str:
+        return str(
+            settings.SILICONFLOW_BASE_URL
+            if settings.SILICONFLOW_API_KEY
+            else (settings.OPENAI_BASE_URL or settings.MOONSHOT_BASE_URL or "")
+        ).rstrip("/")
+
+    @staticmethod
+    def _is_embedding_model(model: Optional[str]) -> bool:
+        normalized = LLMService._normalized_model_name(model)
+        return "embedding" in normalized
+
+    @staticmethod
+    def _is_rerank_model(model: Optional[str]) -> bool:
+        normalized = LLMService._normalized_model_name(model)
+        return "reranker" in normalized or "rerank" in normalized
+
+    @staticmethod
+    def _is_vision_model(model: Optional[str]) -> bool:
+        normalized = LLMService._normalized_model_name(model)
+        if not normalized:
+            return False
+        if LLMService._is_embedding_model(normalized) or LLMService._is_rerank_model(normalized):
+            return False
+        return any(token in normalized for token in ("ocr", "-vl", "/vl", "vision", "image", "omni"))
+
     def supports_embeddings(self, model: Optional[str] = None) -> bool:
-        """Whether current env can safely call embedding APIs."""
         if not (self.openai_compatible_client or self.openai_client):
             return False
 
-        selected_model = (model or settings.EMBEDDING_MODEL or "").strip().lower()
+        selected_model = model or settings.EMBEDDING_MODEL
         if not selected_model:
             return False
-
-        selected_base = (settings.OPENAI_BASE_URL or settings.MOONSHOT_BASE_URL or "").strip().lower()
-
-        # DeepSeek public docs expose chat/completions-compatible APIs;
-        # generic OpenAI embedding models (e.g. text-embedding-v3) are not guaranteed there.
-        if "api.deepseek.com" in selected_base and selected_model.startswith("text-embedding"):
+        selected_base = self._primary_api_base().lower()
+        if not settings.SILICONFLOW_API_KEY and (
+            "api.deepseek.com" in selected_base or "api.moonshot.cn" in selected_base
+        ):
             return False
-        if "api.moonshot.cn" in selected_base and selected_model.startswith("text-embedding"):
+        normalized = self._normalized_model_name(selected_model)
+        configured = self._normalized_model_name(settings.EMBEDDING_MODEL)
+        return bool(normalized) and (normalized == configured or self._is_embedding_model(normalized))
+
+    def supports_rerank(self, model: Optional[str] = None) -> bool:
+        selected_model = model or settings.RERANK_MODEL
+        if not selected_model or not settings.RERANK_ENABLED:
             return False
-        return True
+        api_key = settings.SILICONFLOW_API_KEY or settings.OPENAI_API_KEY or settings.MOONSHOT_API_KEY
+        return bool(api_key and self._is_rerank_model(selected_model))
 
     def supports_vision(self, model: Optional[str] = None) -> bool:
-        """Best-effort capability check for multimodal image input."""
         if not (self.openai_compatible_client or self.openai_client or self.deepseek_client):
             return False
 
-        selected_model = (model or settings.DEFAULT_MODEL or "").strip().lower()
+        selected_model = model or settings.DEFAULT_MODEL
         if not selected_model:
             return False
-        if selected_model.startswith("text-embedding"):
-            return False
-        return True
+        return self._is_vision_model(selected_model)
 
-    async def get_embedding(self, text: str, model: Optional[str] = None) -> List[float]:
+    def supports_ocr(self, model: Optional[str] = None) -> bool:
+        if not settings.OCR_ENABLED:
+            return False
+        return self.supports_vision(model or settings.SILICONFLOW_OCR_MODEL)
+
+    async def get_embedding(
+        self,
+        text: str,
+        model: Optional[str] = None,
+        dimensions: Optional[int] = None,
+    ) -> List[float]:
         if not self.supports_embeddings(model):
             raise ValueError("Embedding endpoint is not configured for current provider/model")
 
@@ -93,16 +139,21 @@ class LLMService:
         if not client:
             raise ValueError("OpenAI-compatible client not configured")
 
-        response = await client.embeddings.create(
-            model=model or settings.EMBEDDING_MODEL,
-            input=text,
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model or settings.EMBEDDING_MODEL,
+            "input": text,
+        }
+        target_dimensions = dimensions if dimensions is not None else int(settings.EMBEDDING_DIMENSIONS or 0)
+        if target_dimensions > 0:
+            kwargs["dimensions"] = target_dimensions
+        response = await client.embeddings.create(**kwargs)
         return response.data[0].embedding
 
     async def get_embeddings_batch(
         self,
         texts: List[str],
         model: Optional[str] = None,
+        dimensions: Optional[int] = None,
     ) -> List[List[float]]:
         if not self.supports_embeddings(model):
             raise ValueError("Embedding endpoint is not configured for current provider/model")
@@ -111,11 +162,91 @@ class LLMService:
         if not client:
             raise ValueError("OpenAI-compatible client not configured")
 
-        response = await client.embeddings.create(
-            model=model or settings.EMBEDDING_MODEL,
-            input=texts,
-        )
+        kwargs: Dict[str, Any] = {
+            "model": model or settings.EMBEDDING_MODEL,
+            "input": texts,
+        }
+        target_dimensions = dimensions if dimensions is not None else int(settings.EMBEDDING_DIMENSIONS or 0)
+        if target_dimensions > 0:
+            kwargs["dimensions"] = target_dimensions
+        response = await client.embeddings.create(**kwargs)
         return [item.embedding for item in response.data]
+
+    async def rerank(
+        self,
+        *,
+        query: str,
+        documents: List[str],
+        model: Optional[str] = None,
+        top_n: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        selected_model = model or settings.RERANK_MODEL
+        if not self.supports_rerank(selected_model):
+            return []
+        if not query or not documents:
+            return []
+
+        api_key = settings.SILICONFLOW_API_KEY or settings.OPENAI_API_KEY or settings.MOONSHOT_API_KEY
+        if not api_key:
+            return []
+
+        payload: Dict[str, Any] = {
+            "model": selected_model,
+            "query": query,
+            "documents": documents,
+            "top_n": max(1, min(len(documents), int(top_n or settings.RERANK_TOP_N or len(documents)))),
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            trust_env=settings.LLM_TRUST_ENV_PROXY,
+        ) as client:
+            response = await client.post(f"{self._primary_api_base()}/rerank", headers=headers, json=payload)
+            response.raise_for_status()
+            body = response.json()
+
+        results = body.get("results") or []
+        return [item for item in results if isinstance(item, dict)]
+
+    async def ocr_image(
+        self,
+        image_url: str,
+        *,
+        prompt: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> str:
+        selected_model = model or settings.SILICONFLOW_OCR_MODEL
+        if not self.supports_ocr(selected_model):
+            return ""
+        normalized_image = str(image_url or "").strip()
+        if not normalized_image:
+            return ""
+
+        response = await self.chat_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                            or (
+                                "Extract all visible text from this page image. "
+                                "Return plain text only. Preserve formulas and table values when visible."
+                            ),
+                        },
+                        {"type": "image_url", "image_url": {"url": normalized_image}},
+                    ],
+                }
+            ],
+            model=selected_model,
+            stream=False,
+        )
+        return str(response.get("content") or "").strip()[: max(2000, int(settings.OCR_MAX_OUTPUT_CHARS or 24000))]
 
     async def chat_completion(
         self,

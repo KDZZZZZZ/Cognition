@@ -39,11 +39,154 @@ interface QuickActionMenuState {
 interface UploadProgressState {
   total: number;
   completed: number;
+  currentFileIndex: number;
+  currentFileName: string;
+  currentFilePages: number | null;
+  currentFileSizeMb: number;
+  phase: 'preparing' | 'uploading' | 'processing' | 'finalizing';
+  currentFileProgress: number;
+  overallProgress: number;
+  estimateRemainingMs: number | null;
+  elapsedMs: number;
 }
 
 const QUICK_ACTION_MENU_WIDTH = 190;
 const QUICK_ACTION_MENU_HEIGHT = 240;
 const QUICK_ACTION_MENU_MARGIN = 8;
+const UPLOAD_BENCHMARK_KEY = 'cognition.upload.benchmark.v1';
+const DEFAULT_UPLOAD_BENCHMARK = {
+  pdfMsPerPage: 1800,
+  genericMsPerMb: 1100,
+};
+
+function readUploadBenchmark() {
+  if (typeof window === 'undefined') return DEFAULT_UPLOAD_BENCHMARK;
+  try {
+    const raw = window.localStorage.getItem(UPLOAD_BENCHMARK_KEY);
+    if (!raw) return DEFAULT_UPLOAD_BENCHMARK;
+    const parsed = JSON.parse(raw);
+    return {
+      pdfMsPerPage: Number(parsed?.pdfMsPerPage) || DEFAULT_UPLOAD_BENCHMARK.pdfMsPerPage,
+      genericMsPerMb: Number(parsed?.genericMsPerMb) || DEFAULT_UPLOAD_BENCHMARK.genericMsPerMb,
+    };
+  } catch {
+    return DEFAULT_UPLOAD_BENCHMARK;
+  }
+}
+
+function writeUploadBenchmark(next: typeof DEFAULT_UPLOAD_BENCHMARK) {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(UPLOAD_BENCHMARK_KEY, JSON.stringify(next));
+}
+
+async function readPdfPageCount(file: File): Promise<number | null> {
+  if (!file.name.toLowerCase().endsWith('.pdf')) return null;
+  try {
+    const { pdfjs } = await import('react-pdf');
+    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
+      pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+    }
+    const buffer = await file.arrayBuffer();
+    const doc = await pdfjs.getDocument({ data: buffer }).promise;
+    return Number.isFinite(doc.numPages) ? doc.numPages : null;
+  } catch {
+    return null;
+  }
+}
+
+async function estimateUploadWork(file: File) {
+  const benchmark = readUploadBenchmark();
+  const sizeMb = Math.max(file.size / (1024 * 1024), 0.05);
+  const pages = await readPdfPageCount(file);
+
+  if (pages) {
+    return {
+      pages,
+      sizeMb,
+      estimatedMs: Math.max(3000, Math.round(pages * benchmark.pdfMsPerPage + sizeMb * 420)),
+    };
+  }
+
+  return {
+    pages: null,
+    sizeMb,
+    estimatedMs: Math.max(2200, Math.round(sizeMb * benchmark.genericMsPerMb + 1400)),
+  };
+}
+
+function updateUploadBenchmark(
+  estimate: Awaited<ReturnType<typeof estimateUploadWork>>,
+  elapsedMs: number
+) {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
+  const current = readUploadBenchmark();
+  if (estimate.pages && estimate.pages > 0) {
+    current.pdfMsPerPage = Math.max(
+      600,
+      Math.round(current.pdfMsPerPage * 0.72 + (elapsedMs / estimate.pages) * 0.28)
+    );
+  } else if (estimate.sizeMb > 0) {
+    current.genericMsPerMb = Math.max(
+      350,
+      Math.round(current.genericMsPerMb * 0.72 + (elapsedMs / estimate.sizeMb) * 0.28)
+    );
+  }
+  writeUploadBenchmark(current);
+}
+
+function formatDuration(ms: number | null) {
+  if (!ms || ms <= 0) return 'finishing';
+  const totalSeconds = Math.max(1, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds}s`;
+}
+
+function phaseLabel(phase: UploadProgressState['phase']) {
+  if (phase === 'preparing') return 'Preparing upload';
+  if (phase === 'uploading') return 'Uploading bytes';
+  if (phase === 'processing') return 'Parsing · OCR · Embedding';
+  return 'Finalizing index';
+}
+
+function UploadProgressRing({ progress }: { progress: number }) {
+  const radius = 34;
+  const circumference = 2 * Math.PI * radius;
+  const clamped = Math.max(0, Math.min(100, progress));
+  const dashOffset = circumference * (1 - clamped / 100);
+
+  return (
+    <div data-testid="upload-progress-ring" className="relative h-24 w-24 flex-shrink-0">
+      <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_30%_30%,rgba(255,255,255,0.88),rgba(191,219,254,0.52)_42%,rgba(219,234,254,0.14)_72%,transparent_100%)]" />
+      <svg className="relative h-24 w-24 -rotate-90 drop-shadow-[0_8px_16px_rgba(59,130,246,0.18)]" viewBox="0 0 96 96">
+        <circle cx="48" cy="48" r={radius} fill="none" stroke="rgba(148,163,184,0.18)" strokeWidth="8" />
+        <circle
+          cx="48"
+          cy="48"
+          r={radius}
+          fill="none"
+          stroke="url(#upload-ring-gradient)"
+          strokeWidth="8"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={dashOffset}
+        />
+        <defs>
+          <linearGradient id="upload-ring-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#0f766e" />
+            <stop offset="52%" stopColor="#2563eb" />
+            <stop offset="100%" stopColor="#7c3aed" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <span className="text-[22px] font-semibold tracking-[-0.04em] text-slate-950">{Math.round(clamped)}</span>
+        <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">Total</span>
+      </div>
+    </div>
+  );
+}
 
 export function FileTree() {
   const {
@@ -86,11 +229,9 @@ export function FileTree() {
     parentId: undefined,
   });
   const [pathFocusId, setPathFocusId] = useState<string | undefined>(undefined);
-  const [pendingUploadParentId, setPendingUploadParentId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
 
   const treeRef = useRef<HTMLDivElement>(null);
-  const uploadInputRef = useRef<HTMLInputElement>(null);
   const activeFileId = panes.find((p) => p.id === activePaneId)?.activeTabId || null;
 
   useEffect(() => {
@@ -324,25 +465,90 @@ export function FileTree() {
     setRefreshing(false);
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const parentId = pendingUploadParentId;
-    const selectedFiles = Array.from(files);
-
-    setUploadProgress({ total: selectedFiles.length, completed: 0 });
+  const handleSelectedFiles = useCallback(async (selectedFiles: File[], parentId: string | null) => {
+    if (selectedFiles.length === 0) return;
     try {
       for (const [index, file] of selectedFiles.entries()) {
-        await apiUploadFile(file, parentId || null);
-        setUploadProgress({ total: selectedFiles.length, completed: index + 1 });
+        const estimate = await estimateUploadWork(file);
+        const startedAt = performance.now();
+        let uploadRatio = 0;
+        let settled = false;
+
+        const emitProgress = (phaseOverride?: UploadProgressState['phase']) => {
+          const elapsedMs = Math.max(0, performance.now() - startedAt);
+          const phase = phaseOverride || (uploadRatio >= 1 ? 'processing' : 'uploading');
+          let currentFileRatio = 0.04;
+          if (phase === 'preparing') {
+            currentFileRatio = 0.04;
+          } else if (phase === 'uploading') {
+            currentFileRatio = Math.max(0.08, uploadRatio * 0.24);
+          } else if (phase === 'processing') {
+            const processingRatio = Math.min(0.72, elapsedMs / Math.max(estimate.estimatedMs, 1) * 0.72);
+            currentFileRatio = Math.min(0.96, 0.24 + processingRatio);
+          } else {
+            currentFileRatio = 1;
+          }
+
+          setUploadProgress({
+            total: selectedFiles.length,
+            completed: phase === 'finalizing' ? index + 1 : index,
+            currentFileIndex: index + 1,
+            currentFileName: file.name,
+            currentFilePages: estimate.pages,
+            currentFileSizeMb: estimate.sizeMb,
+            phase,
+            currentFileProgress: Math.round(currentFileRatio * 100),
+            overallProgress: Math.round(((index + currentFileRatio) / selectedFiles.length) * 100),
+            estimateRemainingMs: phase === 'finalizing' ? 0 : Math.max(0, estimate.estimatedMs - elapsedMs),
+            elapsedMs: Math.round(elapsedMs),
+          });
+        };
+
+        emitProgress('preparing');
+        const ticker = window.setInterval(() => {
+          if (!settled) emitProgress();
+        }, 140);
+
+        try {
+          const uploadedFileId = await apiUploadFile(file, parentId || null, {
+            onUploadProgress: (snapshot) => {
+              uploadRatio = Math.min(1, snapshot.percent / 100);
+              emitProgress(uploadRatio >= 1 ? 'processing' : 'uploading');
+            },
+          });
+          if (!uploadedFileId) {
+            throw new Error(`Upload failed for ${file.name}`);
+          }
+          settled = true;
+          window.clearInterval(ticker);
+          const elapsedMs = Math.max(0, performance.now() - startedAt);
+          updateUploadBenchmark(estimate, elapsedMs);
+          setUploadProgress({
+            total: selectedFiles.length,
+            completed: index + 1,
+            currentFileIndex: index + 1,
+            currentFileName: file.name,
+            currentFilePages: estimate.pages,
+            currentFileSizeMb: estimate.sizeMb,
+            phase: 'finalizing',
+            currentFileProgress: 100,
+            overallProgress: Math.round(((index + 1) / selectedFiles.length) * 100),
+            estimateRemainingMs: 0,
+            elapsedMs: Math.round(elapsedMs),
+          });
+        } finally {
+          settled = true;
+          window.clearInterval(ticker);
+        }
       }
       await loadFilesFromBackend();
+    } catch (error) {
+      console.error('Failed to upload file(s):', error);
     } finally {
+      await new Promise((resolve) => window.setTimeout(resolve, 480));
       setUploadProgress(null);
-      setPendingUploadParentId(null);
-      e.target.value = '';
     }
-  };
+  }, [apiUploadFile, loadFilesFromBackend]);
 
   const openNewDialog = (type: DialogType, parentId?: string, file?: FileNode) => {
     setDialogType(type);
@@ -357,8 +563,48 @@ export function FileTree() {
   };
 
   const triggerUploadForParent = (parentId?: string) => {
-    setPendingUploadParentId(parentId || null);
-    uploadInputRef.current?.click();
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.md,.txt,.pdf';
+    input.multiple = true;
+    input.tabIndex = -1;
+    input.setAttribute('aria-hidden', 'true');
+    input.style.position = 'absolute';
+    input.style.width = '1px';
+    input.style.height = '1px';
+    input.style.opacity = '0';
+    input.style.overflow = 'hidden';
+    input.style.pointerEvents = 'none';
+    input.style.clipPath = 'inset(50%)';
+    input.style.whiteSpace = 'nowrap';
+    input.style.left = '-9999px';
+    input.style.top = '0';
+
+    const cleanup = () => {
+      input.removeEventListener('change', handleChange);
+      input.remove();
+    };
+
+    const handleChange = () => {
+      const files = input.files ? Array.from(input.files) : [];
+      cleanup();
+      if (files.length === 0) return;
+      void handleSelectedFiles(files, parentId || null);
+    };
+
+    input.addEventListener('change', handleChange, { once: true });
+    input.addEventListener('cancel', cleanup, { once: true });
+    document.body.appendChild(input);
+
+    try {
+      if (typeof input.showPicker === 'function') {
+        input.showPicker();
+        return;
+      }
+    } catch {
+      // Fall back to click below.
+    }
+    input.click();
   };
 
   const handleCreate = async (name: string) => {
@@ -534,6 +780,7 @@ export function FileTree() {
               {findPathForNode(pathFocusId || selectedParentId).join(' / ')}
             </div>
             <button
+              data-testid="explorer-add-root"
               className="p-1.5 rounded-full border border-theme-border/25 hover:bg-theme-text/10 transition-colors"
               title="Add at current path"
               onClick={(e) => openQuickActionMenu(e, pathFocusId || selectedParentId)}
@@ -547,6 +794,7 @@ export function FileTree() {
         <div className="px-4 py-2 text-xs font-semibold tracking-[0.08em] text-theme-text/45 uppercase flex items-center justify-between">
           <span>Explorer</span>
           <button
+            data-testid="explorer-refresh"
             onClick={handleRefresh}
             className={`p-1.5 hover:bg-theme-text/10 rounded-md transition-colors pill-button ${refreshing ? 'animate-spin' : ''}`}
             title="Refresh"
@@ -556,13 +804,54 @@ export function FileTree() {
         </div>
 
         {uploadProgress && (
-          <div className="mx-4 mb-2 rounded-lg border border-blue-500/18 bg-blue-50/55 px-3 py-2 text-[11px] text-blue-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.42)]">
-            <div className="font-medium">
-              Uploading and indexing {uploadProgress.total} file{uploadProgress.total > 1 ? 's' : ''}.
-            </div>
-            <div className="mt-1 text-blue-900/80">
-              Files appear after embeddings are ready and persisted.
-              {uploadProgress.completed > 0 ? ` ${uploadProgress.completed}/${uploadProgress.total} finished.` : ''}
+          <div
+            data-testid="upload-progress-card"
+            className="mx-4 mb-3 overflow-hidden rounded-[26px] border border-sky-200/75 bg-[linear-gradient(135deg,rgba(239,246,255,0.98),rgba(224,242,254,0.92)_52%,rgba(245,243,255,0.94))] px-4 py-4 shadow-[0_18px_40px_rgba(14,116,144,0.12)]"
+          >
+            <div className="flex items-center gap-4">
+              <UploadProgressRing progress={uploadProgress.overallProgress} />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-sky-700/75">
+                      {phaseLabel(uploadProgress.phase)}
+                    </div>
+                    <div className="mt-1 truncate text-sm font-semibold text-slate-950">
+                      {uploadProgress.currentFileName}
+                    </div>
+                    <div className="mt-1 text-[11px] text-slate-600">
+                      File {uploadProgress.currentFileIndex}/{uploadProgress.total}
+                      {uploadProgress.currentFilePages
+                        ? ` · ${uploadProgress.currentFilePages} pages`
+                        : ` · ${uploadProgress.currentFileSizeMb.toFixed(1)} MB`}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-lg font-semibold tracking-[-0.04em] text-slate-950">
+                      {uploadProgress.currentFileProgress}%
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      {uploadProgress.completed} completed
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/70 ring-1 ring-sky-200/60">
+                  <div
+                    className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e_0%,#2563eb_56%,#7c3aed_100%)] transition-[width] duration-200 ease-out"
+                    style={{ width: `${uploadProgress.currentFileProgress}%` }}
+                  />
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-slate-600">
+                  <span>{formatDuration(uploadProgress.elapsedMs)} elapsed</span>
+                  <span>
+                    {uploadProgress.estimateRemainingMs === 0
+                      ? 'index ready'
+                      : `~${formatDuration(uploadProgress.estimateRemainingMs)} remaining`}
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -584,20 +873,10 @@ export function FileTree() {
           </div>
         )}
       </div>
-
-      {/* Targeted Upload Input */}
-      <input
-        ref={uploadInputRef}
-        type="file"
-        className="hidden"
-        accept=".md,.txt,.pdf"
-        multiple
-        onChange={handleFileUpload}
-      />
-
       {/* Folder/Root Quick Action Menu */}
       {quickActionMenu.visible && (
         <div
+          data-testid="explorer-quick-action-menu"
           className="fixed z-[60] min-w-[190px] rounded-lg border border-theme-border/25 bg-theme-bg shadow-[0_12px_28px_rgba(0,0,0,0.16)] py-1"
           style={{
             left: quickActionMenu.x,
@@ -606,6 +885,7 @@ export function FileTree() {
           onClick={(e) => e.stopPropagation()}
         >
           <button
+            data-testid="quick-action-new-file"
             className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
             onClick={() => {
               openNewDialog('md', quickActionMenu.parentId);
@@ -615,6 +895,7 @@ export function FileTree() {
             New File
           </button>
           <button
+            data-testid="quick-action-new-session"
             className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
             onClick={() => {
               openNewDialog('session', quickActionMenu.parentId);
@@ -624,6 +905,7 @@ export function FileTree() {
             New Session
           </button>
           <button
+            data-testid="quick-action-new-folder"
             className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
             onClick={() => {
               openNewDialog('folder', quickActionMenu.parentId);
@@ -633,6 +915,7 @@ export function FileTree() {
             New Folder
           </button>
           <button
+            data-testid="quick-action-upload-file"
             className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
             onClick={() => {
               triggerUploadForParent(quickActionMenu.parentId);

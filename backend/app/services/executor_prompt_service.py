@@ -2,6 +2,136 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from app.prompts.system_prompts import SystemPrompts
 
+EDITOR_TOOL_NAMES = {
+    "update_file",
+    "update_block",
+    "insert_block",
+    "delete_block",
+    "add_file_charts_to_note",
+}
+WRITE_INTENT_HINTS = {
+    "write",
+    "写",
+    "写入",
+    "update",
+    "modify",
+    "edit",
+    "append",
+    "笔记",
+    "note",
+    "整理",
+    "卡片",
+}
+NEGATIVE_WRITE_HINTS = {
+    "不要写",
+    "别写",
+    "不写笔记",
+    "不要修改",
+    "不要写入",
+    "别改",
+}
+
+
+def _tool_name(tool: Dict[str, Any]) -> str:
+    function = tool.get("function") if isinstance(tool, dict) else None
+    return str((function or {}).get("name") or tool.get("name") or "").strip()
+
+
+def _has_write_intent(message: str) -> bool:
+    lowered = (message or "").lower()
+    if any(token in lowered for token in NEGATIVE_WRITE_HINTS):
+        return False
+    return any(token in lowered for token in WRITE_INTENT_HINTS)
+
+
+def _writable_markdown_targets(
+    permissions: Dict[str, str],
+    permitted_files_info: Dict[str, Dict[str, str]],
+) -> List[str]:
+    targets: List[str] = []
+    for file_id, perm in (permissions or {}).items():
+        if perm != "write":
+            continue
+        info = permitted_files_info.get(file_id) or {}
+        if str(info.get("type") or "") != "md":
+            continue
+        targets.append(str(info.get("name") or file_id))
+    return targets
+
+
+def resolve_runtime_writeback_requirement(
+    *,
+    step_definition: Dict[str, Any],
+    current_user_message: str,
+    permissions: Dict[str, str],
+    permitted_files_info: Dict[str, Dict[str, str]],
+    tools: Sequence[Dict[str, Any]],
+) -> Dict[str, Any]:
+    catalog_policy = str(step_definition.get("writeback_policy") or "never")
+    writable_targets = _writable_markdown_targets(permissions, permitted_files_info)
+    has_write_intent = _has_write_intent(current_user_message)
+    exposed_tool_names = {_tool_name(tool) for tool in tools}
+    has_editor_tools = bool(exposed_tool_names & EDITOR_TOOL_NAMES)
+    runtime_requirement = "not_applicable"
+
+    if catalog_policy == "required":
+        if writable_targets and has_editor_tools:
+            runtime_requirement = "pending_diff_required"
+        elif writable_targets:
+            runtime_requirement = "writeback_blocked_no_editor_tool"
+        else:
+            runtime_requirement = "writeback_blocked_no_writable_note"
+    elif catalog_policy == "optional":
+        if writable_targets and has_editor_tools and has_write_intent:
+            runtime_requirement = "pending_diff_required"
+        elif writable_targets and has_editor_tools:
+            runtime_requirement = "writeback_optional"
+        elif writable_targets and has_write_intent:
+            runtime_requirement = "writeback_blocked_no_editor_tool"
+        elif has_write_intent:
+            runtime_requirement = "writeback_blocked_no_writable_note"
+
+    return {
+        "catalog_policy": catalog_policy,
+        "runtime_requirement": runtime_requirement,
+        "writable_targets": writable_targets,
+        "has_write_intent": has_write_intent,
+        "has_editor_tools": has_editor_tools,
+    }
+
+
+def build_runtime_writeback_contract_summary(
+    *,
+    step_definition: Dict[str, Any],
+    current_user_message: str,
+    permissions: Dict[str, str],
+    permitted_files_info: Dict[str, Dict[str, str]],
+    tools: Sequence[Dict[str, Any]],
+) -> Optional[str]:
+    writeback = resolve_runtime_writeback_requirement(
+        step_definition=step_definition,
+        current_user_message=current_user_message,
+        permissions=permissions,
+        permitted_files_info=permitted_files_info,
+        tools=tools,
+    )
+    if writeback["runtime_requirement"] != "pending_diff_required":
+        return None
+
+    writable_targets = writeback.get("writable_targets") or []
+    lines = [
+        "Runtime Writeback Contract",
+        f"Writable markdown targets: {', '.join(writable_targets) if writable_targets else 'none'}",
+        "This turn explicitly requires note writeback.",
+        "Completion bar:",
+        "- Do not stop after reading, summarizing, citing evidence, or replying in chat only.",
+        "- Before this step is complete, create at least one pending diff on a writable markdown note with editor tools.",
+        "- If figure/table visual assets are not ready, first write the textual summary card plus page-based evidence into the note.",
+        "- Treat chart insertion as a follow-up improvement, not as a reason to skip the base note diff.",
+        "- If writing is truly blocked, state the exact blocker explicitly instead of implying completion.",
+    ]
+    return "\n".join(lines)
+
 
 def build_permission_summary(permissions: Dict[str, str], permitted_files_info: Dict[str, Dict[str, str]]) -> str:
     read_lines: List[str] = []
@@ -204,17 +334,32 @@ def build_step_registry_summary(
     return "\n".join(lines)
 
 
-def build_step_tool_policy_summary(step_definition: Dict[str, Any], tools: Sequence[Dict[str, Any]]) -> str:
+def build_step_tool_policy_summary(
+    step_definition: Dict[str, Any],
+    tools: Sequence[Dict[str, Any]],
+    *,
+    current_user_message: str,
+    permissions: Dict[str, str],
+    permitted_files_info: Dict[str, Dict[str, str]],
+) -> str:
     tool_names = []
     for tool in tools:
-        fn = tool.get("function") if isinstance(tool, dict) else None
-        name = str((fn or {}).get("name") or "").strip()
+        name = _tool_name(tool)
         if name:
             tool_names.append(name)
+    writeback = resolve_runtime_writeback_requirement(
+        step_definition=step_definition,
+        current_user_message=current_user_message,
+        permissions=permissions,
+        permitted_files_info=permitted_files_info,
+        tools=tools,
+    )
     parts = [
         "Step Tool Policy",
         f"Allowed Groups: {', '.join(step_definition.get('allowed_tool_groups') or []) or 'none'}",
-        f"Writeback Policy: {step_definition.get('writeback_policy') or 'never'}",
+        f"Catalog Writeback Policy: {writeback['catalog_policy']}",
+        f"Runtime Writeback Requirement: {writeback['runtime_requirement']}",
+        f"Writable Markdown Targets: {', '.join(writeback['writable_targets']) or 'none'}",
         f"Result Kind: {step_definition.get('result_kind') or 'answer'}",
         f"Exposed Tools: {', '.join(tool_names) or 'none'}",
     ]
@@ -244,6 +389,7 @@ def build_step_executor_sections(
     *,
     global_rules_text: str,
     step_definition: Dict[str, Any],
+    current_user_message: str,
     registry_snapshot: Dict[str, Any],
     active_task: Dict[str, Any],
     active_step: Dict[str, Any],
@@ -256,6 +402,13 @@ def build_step_executor_sections(
     router_tool_hints: Optional[Dict[str, Any]] = None,
     retrieval_summary_text: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    writeback_contract_text = build_runtime_writeback_contract_summary(
+        step_definition=step_definition,
+        current_user_message=current_user_message,
+        permissions=permissions,
+        permitted_files_info=permitted_files_info,
+        tools=tools,
+    )
     sections: List[Dict[str, Any]] = [
         {
             "key": "invariant_core",
@@ -311,6 +464,13 @@ def build_step_executor_sections(
             "required": True,
         },
         {
+            "key": "writeback_contract",
+            "title": "Runtime Writeback Contract",
+            "text": writeback_contract_text or "",
+            "priority": 840,
+            "required": bool(writeback_contract_text),
+        },
+        {
             "key": "viewport_memory",
             "title": "Viewport Document Memory",
             "text": viewport_memory_summary or "No active viewport memory.",
@@ -341,7 +501,13 @@ def build_step_executor_sections(
         {
             "key": "tool_policy",
             "title": "Step Tool Policy",
-            "text": build_step_tool_policy_summary(step_definition, tools),
+            "text": build_step_tool_policy_summary(
+                step_definition,
+                tools,
+                current_user_message=current_user_message,
+                permissions=permissions,
+                permitted_files_info=permitted_files_info,
+            ),
             "priority": 780,
             "required": True,
         },

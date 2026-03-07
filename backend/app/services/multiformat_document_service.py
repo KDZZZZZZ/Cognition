@@ -27,6 +27,8 @@ from app.models import (
     SegmentEmbedding,
 )
 from app.services.document_parser import parser
+from app.services.embedding_windowing import build_page_window_texts
+from app.services.llm_service import llm_service
 from app.services.token_budget_service import estimate_tokens, short_text
 from app.services.vector_store import vector_store
 from app.services.visual_retrieval_service import visual_retrieval_service
@@ -107,6 +109,12 @@ class EmbeddingProvider(ABC):
     @abstractmethod
     def is_enabled(self) -> bool:
         raise NotImplementedError
+
+    def supports_image_inputs(self) -> bool:
+        return False
+
+    def supports_fused_inputs(self) -> bool:
+        return False
 
     @abstractmethod
     async def embed_text(self, texts: List[str]) -> List[List[float]]:
@@ -450,16 +458,26 @@ class Qwen3VLEmbeddingProvider(EmbeddingProvider):
     MAX_IMAGES_PER_REQUEST = 5
 
     def __init__(self):
-        self.api_key = settings.DASHSCOPE_API_KEY
-        self.base_url = settings.DASHSCOPE_BASE_URL.rstrip("/")
-        self.model = settings.QWEN_VL_EMBEDDING_MODEL
-        self.dimension = int(settings.QWEN_VL_EMBEDDING_DIM)
-        self.output_type = settings.QWEN_VL_EMBEDDING_OUTPUT_TYPE
-        self.batch_size = max(1, int(settings.QWEN_VL_EMBEDDING_BATCH))
-        self.provider_name = "qwen3-vl-embedding"
+        self.api_key = settings.SILICONFLOW_API_KEY or settings.OPENAI_API_KEY or settings.MOONSHOT_API_KEY
+        self.base_url = (
+            settings.SILICONFLOW_BASE_URL
+            if settings.SILICONFLOW_API_KEY
+            else (settings.OPENAI_BASE_URL or settings.MOONSHOT_BASE_URL or "")
+        ).rstrip("/")
+        self.model = settings.EMBEDDING_MODEL
+        self.dimension = int(settings.EMBEDDING_DIMENSIONS or 0)
+        self.batch_size = max(1, min(int(settings.QWEN_VL_EMBEDDING_BATCH or 20), self.MAX_CONTENTS_PER_REQUEST))
+        self.provider_name = "siliconflow-qwen3-embedding-8b"
+        self._ocr_cache: Dict[str, str] = {}
 
     def is_enabled(self) -> bool:
         return bool(self.api_key and self.model)
+
+    def supports_image_inputs(self) -> bool:
+        return False
+
+    def supports_fused_inputs(self) -> bool:
+        return False
 
     def _image_count_for_content(self, item: Dict[str, str]) -> int:
         if str(item.get("image") or "").strip():
@@ -491,21 +509,39 @@ class Qwen3VLEmbeddingProvider(EmbeddingProvider):
             batches.append(current)
         return batches
 
+    async def _content_to_text(self, item: Dict[str, str]) -> str:
+        text = str(item.get("text") or "").strip()
+        image_url = str(item.get("image") or item.get("image_url") or "").strip()
+        if not image_url:
+            return text
+
+        cached = self._ocr_cache.get(image_url)
+        if cached is None:
+            cached = await llm_service.ocr_image(
+                image_url,
+                prompt=(
+                    "Extract all visible text from this image. "
+                    "Return plain text only. Keep labels, formulas, and table cells when visible."
+                ),
+            )
+            self._ocr_cache[image_url] = cached
+
+        combined = "\n\n".join(part for part in [text, cached] if part).strip()
+        return combined or text
+
     async def _request_embeddings(self, contents: List[Dict[str, str]]) -> List[List[float]]:
         if not contents:
             return []
         if not self.is_enabled():
-            raise ValueError("DashScope API key/model not configured for qwen3-vl-embedding")
+            raise ValueError("SiliconFlow embedding key/model not configured")
 
-        url = f"{self.base_url}/services/embeddings/multimodal-embedding/multimodal-embedding"
-        payload = {
+        normalized_inputs = [await self._content_to_text(item) for item in contents]
+        payload: Dict[str, Any] = {
             "model": self.model,
-            "input": {"contents": contents},
-            "parameters": {
-                "dimension": self.dimension,
-                "output_type": self.output_type,
-            },
+            "input": normalized_inputs,
         }
+        if self.dimension > 0:
+            payload["dimensions"] = self.dimension
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -518,7 +554,7 @@ class Qwen3VLEmbeddingProvider(EmbeddingProvider):
                     timeout=max(30.0, float(settings.QWEN_VL_EMBEDDING_TIMEOUT_SECONDS or 120.0)),
                     trust_env=settings.LLM_TRUST_ENV_PROXY,
                 ) as client:
-                    resp = await client.post(url, headers=headers, json=payload)
+                    resp = await client.post(f"{self.base_url}/embeddings", headers=headers, json=payload)
                     resp.raise_for_status()
                     body = resp.json()
                 break
@@ -528,9 +564,9 @@ class Qwen3VLEmbeddingProvider(EmbeddingProvider):
                     raise
                 await asyncio.sleep(min(0.25 * (2 ** attempt), 1.0))
         else:
-            raise ValueError(f"qwen3-vl-embedding request failed: {last_error}")
+            raise ValueError(f"SiliconFlow embedding request failed: {last_error}")
 
-        embeddings = ((body or {}).get("output") or {}).get("embeddings") or []
+        embeddings = (body or {}).get("data") or ((body or {}).get("output") or {}).get("embeddings") or []
         vectors: List[List[float]] = []
         for item in embeddings:
             vector = item.get("embedding")
@@ -538,7 +574,7 @@ class Qwen3VLEmbeddingProvider(EmbeddingProvider):
                 vectors.append(vector)
         if len(vectors) != len(contents):
             raise ValueError(
-                f"qwen3-vl-embedding returned {len(vectors)} vectors for {len(contents)} inputs"
+                f"SiliconFlow embeddings returned {len(vectors)} vectors for {len(contents)} inputs"
             )
         return vectors
 
@@ -582,7 +618,7 @@ class TextRetrievalProvider(RetrievalProvider):
         file_ids = kwargs.get("file_ids") or None
         source_types = kwargs.get("source_types") or None
         top_k = int(kwargs.get("top_k") or 8)
-        modalities = kwargs.get("modalities") or ["fused", "text"]
+        modalities = kwargs.get("modalities") or ["text"]
 
         results = await vector_store.search_segment_embeddings(
             query_embedding=query_embedding,
@@ -858,6 +894,24 @@ class ReaderOrchestrator:
         meta["embedding_errors"] = embedding_errors
         segment.meta = meta
 
+    def _build_segment_text_inputs(
+        self,
+        *,
+        source_type: str,
+        segments: List[DocumentSegment],
+    ) -> tuple[List[str], List[tuple[int, int]]]:
+        if source_type != "pdf":
+            return [segment.text for segment in segments], [(int(segment.page or 1), int(segment.page or 1)) for segment in segments]
+
+        window_texts, segment_keys = build_page_window_texts(
+            segments,
+            page_getter=lambda segment: segment.page,
+            text_getter=lambda segment: segment.text,
+            window_size=max(1, int(settings.EMBEDDING_PDF_PAGE_WINDOW or 5)),
+            max_chars=max(2400, int(settings.OCR_MAX_OUTPUT_CHARS or 24000)),
+        )
+        return [window_texts.get(key) or segment.text for segment, key in zip(segments, segment_keys)], segment_keys
+
     async def _index_segment_embeddings(
         self,
         *,
@@ -878,42 +932,53 @@ class ReaderOrchestrator:
                 meta.pop("embedding_errors", None)
                 segment.meta = meta
 
-        texts = [segment.text for segment in segments]
+        texts, text_window_keys = self._build_segment_text_inputs(
+            source_type=source_type,
+            segments=segments,
+        )
         text_vectors, text_errors = await self._embed_items_resilient(
             items=texts,
             embed_fn=self.embedding_provider.embed_text,
         )
 
-        fused_inputs: List[Dict[str, str]] = []
+        supports_fused = bool(getattr(self.embedding_provider, "supports_fused_inputs", lambda: True)())
+        supports_image = bool(getattr(self.embedding_provider, "supports_image_inputs", lambda: True)())
+
+        fused_vectors: List[Optional[List[float]]] = []
+        fused_errors: Dict[int, str] = {}
+        image_vectors: List[Optional[List[float]]] = []
+        image_errors: Dict[int, str] = {}
         unique_image_inputs: List[str] = []
         image_input_index_by_page: Dict[int, int] = {}
         image_page_by_segment_index: Dict[int, int] = {}
-        for index, segment in enumerate(segments):
-            image_url = None
-            if page_image_map and segment.page is not None:
-                image_url = page_image_map.get(int(segment.page))
 
-            fused_item: Dict[str, str] = {"text": segment.text}
-            if image_url:
-                fused_item["image"] = image_url
-                page_no = int(segment.page)
-                image_page_by_segment_index[index] = page_no
-                if page_no not in image_input_index_by_page:
-                    image_input_index_by_page[page_no] = len(unique_image_inputs)
-                    unique_image_inputs.append(image_url)
-            fused_inputs.append(fused_item)
+        if supports_fused or supports_image:
+            fused_inputs: List[Dict[str, str]] = []
+            for index, segment in enumerate(segments):
+                image_url = None
+                if page_image_map and segment.page is not None:
+                    image_url = page_image_map.get(int(segment.page))
 
-        fused_vectors, fused_errors = await self._embed_items_resilient(
-            items=fused_inputs,
-            embed_fn=self.embedding_provider.embed_fused,
-        )
-        image_vectors: List[Optional[List[float]]] = []
-        image_errors: Dict[int, str] = {}
-        if unique_image_inputs:
-            image_vectors, image_errors = await self._embed_items_resilient(
-                items=unique_image_inputs,
-                embed_fn=self.embedding_provider.embed_image,
-            )
+                fused_item: Dict[str, str] = {"text": texts[index] if index < len(texts) else segment.text}
+                if image_url:
+                    fused_item["image"] = image_url
+                    page_no = int(segment.page)
+                    image_page_by_segment_index[index] = page_no
+                    if page_no not in image_input_index_by_page:
+                        image_input_index_by_page[page_no] = len(unique_image_inputs)
+                        unique_image_inputs.append(image_url)
+                fused_inputs.append(fused_item)
+
+            if supports_fused:
+                fused_vectors, fused_errors = await self._embed_items_resilient(
+                    items=fused_inputs,
+                    embed_fn=self.embedding_provider.embed_fused,
+                )
+            if supports_image and unique_image_inputs:
+                image_vectors, image_errors = await self._embed_items_resilient(
+                    items=unique_image_inputs,
+                    embed_fn=self.embedding_provider.embed_image,
+                )
 
         ids: List[str] = []
         embeddings: List[List[float]] = []
@@ -927,6 +992,7 @@ class ReaderOrchestrator:
         def add_item(
             *,
             segment: DocumentSegment,
+            segment_index: int,
             modality: str,
             vector: List[float],
             vector_ref: str,
@@ -959,6 +1025,8 @@ class ReaderOrchestrator:
                     "modality": modality,
                     "segment_type": segment.segment_type,
                     "visual_kind": (segment.meta or {}).get("visual_kind"),
+                    "page_window_start": text_window_keys[segment_index][0] if segment_index < len(text_window_keys) else segment.page,
+                    "page_window_end": text_window_keys[segment_index][1] if segment_index < len(text_window_keys) else segment.page,
                 }
             )
 
@@ -967,28 +1035,30 @@ class ReaderOrchestrator:
             if not vector:
                 continue
             ref = str(uuid.uuid4())
-            add_item(segment=segment, modality="text", vector=vector, vector_ref=ref)
+            add_item(segment=segment, segment_index=idx, modality="text", vector=vector, vector_ref=ref)
             text_count += 1
 
-        for idx, segment in enumerate(segments):
-            vector = fused_vectors[idx] if idx < len(fused_vectors) else None
-            if not vector:
-                continue
-            ref = str(uuid.uuid4())
-            add_item(segment=segment, modality="fused", vector=vector, vector_ref=ref)
-            fused_count += 1
+        if supports_fused:
+            for idx, segment in enumerate(segments):
+                vector = fused_vectors[idx] if idx < len(fused_vectors) else None
+                if not vector:
+                    continue
+                ref = str(uuid.uuid4())
+                add_item(segment=segment, segment_index=idx, modality="fused", vector=vector, vector_ref=ref)
+                fused_count += 1
 
-        for seg_idx, segment in enumerate(segments):
-            page_no = image_page_by_segment_index.get(seg_idx)
-            if page_no is None:
-                continue
-            image_idx = image_input_index_by_page.get(page_no)
-            vector = image_vectors[image_idx] if image_idx is not None and image_idx < len(image_vectors) else None
-            if not vector:
-                continue
-            ref = str(uuid.uuid4())
-            add_item(segment=segment, modality="image", vector=vector, vector_ref=ref)
-            image_count += 1
+        if supports_image:
+            for seg_idx, segment in enumerate(segments):
+                page_no = image_page_by_segment_index.get(seg_idx)
+                if page_no is None:
+                    continue
+                image_idx = image_input_index_by_page.get(page_no)
+                vector = image_vectors[image_idx] if image_idx is not None and image_idx < len(image_vectors) else None
+                if not vector:
+                    continue
+                ref = str(uuid.uuid4())
+                add_item(segment=segment, segment_index=seg_idx, modality="image", vector=vector, vector_ref=ref)
+                image_count += 1
 
         error_messages: List[str] = []
         for idx, error_msg in text_errors.items():
@@ -1000,28 +1070,30 @@ class ReaderOrchestrator:
                 )
                 error_messages.append(f"text:{segments[idx].id}")
 
-        for idx, error_msg in fused_errors.items():
-            if idx < len(segments):
-                self._mark_segment_embedding_error(
-                    segment=segments[idx],
-                    modality="fused",
-                    message=error_msg,
-                )
-                error_messages.append(f"fused:{segments[idx].id}")
+        if supports_fused:
+            for idx, error_msg in fused_errors.items():
+                if idx < len(segments):
+                    self._mark_segment_embedding_error(
+                        segment=segments[idx],
+                        modality="fused",
+                        message=error_msg,
+                    )
+                    error_messages.append(f"fused:{segments[idx].id}")
 
-        for seg_idx, segment in enumerate(segments):
-            page_no = image_page_by_segment_index.get(seg_idx)
-            if page_no is None:
-                continue
-            image_idx = image_input_index_by_page.get(page_no)
-            error_msg = image_errors.get(image_idx) if image_idx is not None else None
-            if error_msg:
-                self._mark_segment_embedding_error(
-                    segment=segment,
-                    modality="image",
-                    message=error_msg,
-                )
-                error_messages.append(f"image:{segment.id}")
+        if supports_image:
+            for seg_idx, segment in enumerate(segments):
+                page_no = image_page_by_segment_index.get(seg_idx)
+                if page_no is None:
+                    continue
+                image_idx = image_input_index_by_page.get(page_no)
+                error_msg = image_errors.get(image_idx) if image_idx is not None else None
+                if error_msg:
+                    self._mark_segment_embedding_error(
+                        segment=segment,
+                        modality="image",
+                        message=error_msg,
+                    )
+                    error_messages.append(f"image:{segment.id}")
 
         await db.flush()
         if ids:

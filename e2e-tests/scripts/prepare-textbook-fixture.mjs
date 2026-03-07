@@ -41,9 +41,9 @@ const manifestPath = path.resolve(
 );
 const selectionMode = String(process.env.E2E_TEXTBOOK_SELECTION_MODE || 'backend_text').trim().toLowerCase();
 const cacheDir = path.join(path.dirname(localPdf), '.ocr-cache');
-const dashscopeApiKey = process.env.DASHSCOPE_API_KEY || '';
-const dashscopeBaseUrl = process.env.E2E_TEXTBOOK_OCR_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
-const dashscopeModel = process.env.E2E_TEXTBOOK_OCR_MODEL || 'qwen-vl-ocr-latest';
+const siliconflowApiKey = process.env.SILICONFLOW_API_KEY || '';
+const siliconflowBaseUrl = process.env.E2E_TEXTBOOK_OCR_BASE_URL || 'https://api.siliconflow.cn/v1';
+const siliconflowModel = process.env.E2E_TEXTBOOK_OCR_MODEL || 'deepseek-ai/DeepSeek-OCR';
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your', 'into', 'page', 'then', 'when', 'will', 'were',
@@ -173,9 +173,9 @@ function renderPageImage(page) {
   return path.join(cacheDir, imgName);
 }
 
-async function ocrPageWithQwen(page, imagePath) {
-  if (!dashscopeApiKey) return null;
-  const cachePath = path.join(cacheDir, `page-${page}.qwen.txt`);
+async function ocrPageWithSiliconFlow(page, imagePath) {
+  if (!siliconflowApiKey) return null;
+  const cachePath = path.join(cacheDir, `page-${page}.siliconflow.txt`);
   if (fs.existsSync(cachePath)) {
     const cached = normalizeText(fs.readFileSync(cachePath, 'utf-8'));
     if (cached) return cached;
@@ -185,25 +185,20 @@ async function ocrPageWithQwen(page, imagePath) {
   const imageUrl = `data:image/png;base64,${base64}`;
   const prompt = 'Extract all visible text from this scanned textbook page. Return plain text only. Preserve mathematical symbols when possible. Do not add explanations.';
 
-  const response = await fetch(`${dashscopeBaseUrl}/chat/completions`, {
+  const response = await fetch(`${siliconflowBaseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${dashscopeApiKey}`,
+      Authorization: `Bearer ${siliconflowApiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: dashscopeModel,
+      model: siliconflowModel,
       messages: [
         {
           role: 'user',
           content: [
-            {
-              type: 'image_url',
-              image_url: { url: imageUrl },
-              min_pixels: 32 * 32 * 3,
-              max_pixels: 32 * 32 * 4096,
-            },
             { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageUrl } },
           ],
         },
       ],
@@ -212,7 +207,7 @@ async function ocrPageWithQwen(page, imagePath) {
 
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`Qwen OCR HTTP ${response.status}: ${text.slice(0, 400)}`);
+    throw new Error(`SiliconFlow OCR HTTP ${response.status}: ${text.slice(0, 400)}`);
   }
 
   const json = await response.json();
@@ -245,7 +240,7 @@ async function ocrPage(page) {
 
   const txtPath = path.join(cacheDir, `page-${page}.txt`);
   const modePath = path.join(cacheDir, `page-${page}.mode.txt`);
-  const preferredMode = dashscopeApiKey ? 'qwen_vl_ocr' : 'tesseract_eng';
+  const preferredMode = siliconflowApiKey ? 'deepseek_ocr' : 'tesseract_eng';
   if (fs.existsSync(txtPath)) {
     const cachedMode = fs.existsSync(modePath) ? normalizeText(fs.readFileSync(modePath, 'utf-8')) : '';
     const cached = normalizeText(fs.readFileSync(txtPath, 'utf-8'));
@@ -255,12 +250,12 @@ async function ocrPage(page) {
   const imagePath = renderPageImage(page);
   let text = '';
   let mode = 'tesseract_eng';
-  if (dashscopeApiKey) {
+  if (siliconflowApiKey) {
     try {
-      text = (await ocrPageWithQwen(page, imagePath)) || '';
-      mode = 'qwen_vl_ocr';
+      text = (await ocrPageWithSiliconFlow(page, imagePath)) || '';
+      mode = 'deepseek_ocr';
     } catch (error) {
-      console.warn(`[tb-fixture] qwen OCR failed on page ${page}, falling back to tesseract: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`[tb-fixture] SiliconFlow OCR failed on page ${page}, falling back to tesseract: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   if (!text) {
@@ -444,7 +439,7 @@ async function main() {
     pdf_path: localPdf,
     page_count: pageCount,
     extraction_mode: selectionMode === 'ocr'
-      ? (dashscopeApiKey ? 'qwen_vl_ocr_with_tesseract_fallback' : 'tesseract_eng')
+      ? (siliconflowApiKey ? 'deepseek_ocr_with_tesseract_fallback' : 'tesseract_eng')
       : 'backend_text_pdftotext',
     source_pdf: sourcePdf,
     page_sets: {

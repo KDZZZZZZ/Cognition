@@ -1,3 +1,5 @@
+import asyncio
+import base64
 import uuid
 import re
 from typing import List
@@ -7,6 +9,7 @@ from docx import Document as DocxDocument
 
 from app.config import settings
 from app.models import DocumentChunk
+from app.services.llm_service import llm_service
 
 
 class DocumentParser:
@@ -49,7 +52,7 @@ class DocumentParser:
     async def _parse_pdf(self, path: Path, file_id: str) -> tuple[List[DocumentChunk], dict]:
         """Parse PDF file with page layout information."""
         chunks = []
-        metadata = {"page_count": 0}
+        metadata = {"page_count": 0, "ocr_pages": []}
 
         # Use pdfplumber for accurate layout and coordinates
         with pdfplumber.open(path) as pdf:
@@ -57,26 +60,40 @@ class DocumentParser:
 
             for page_num, page in enumerate(pdf.pages):
                 page_text = page.extract_text()
-                if not page_text:
+                if page_text:
+                    words = page.extract_words(extra_attrs=["fontname", "size"])
+                    paragraphs = self._group_words_to_paragraphs(words)
+                    paragraphs = self._merge_pdf_paragraphs(paragraphs)
+
+                    for idx, para in enumerate(paragraphs):
+                        chunk = DocumentChunk(
+                            id=str(uuid.uuid4()),
+                            file_id=file_id,
+                            page=page_num + 1,
+                            chunk_index=idx,
+                            content=para["text"],
+                            bbox=para.get("bbox")
+                        )
+                        chunks.append(chunk)
                     continue
 
-                # Extract words with their positions
-                words = page.extract_words(extra_attrs=["fontname", "size"])
+                ocr_text = await self._ocr_pdf_page(path, page_num + 1)
+                if not ocr_text:
+                    continue
 
-                # Group into paragraphs based on vertical proximity
-                paragraphs = self._group_words_to_paragraphs(words)
-                paragraphs = self._merge_pdf_paragraphs(paragraphs)
-
-                for idx, para in enumerate(paragraphs):
-                    chunk = DocumentChunk(
-                        id=str(uuid.uuid4()),
-                        file_id=file_id,
-                        page=page_num + 1,
-                        chunk_index=idx,
-                        content=para["text"],
-                        bbox=para.get("bbox")
+                metadata["ocr_pages"].append(page_num + 1)
+                ocr_chunks = self._chunk_plain_text(ocr_text)
+                for idx, text in enumerate(ocr_chunks):
+                    chunks.append(
+                        DocumentChunk(
+                            id=str(uuid.uuid4()),
+                            file_id=file_id,
+                            page=page_num + 1,
+                            chunk_index=idx,
+                            content=text,
+                            bbox=None,
+                        )
                     )
-                    chunks.append(chunk)
 
         return chunks, metadata
 
@@ -258,6 +275,83 @@ class DocumentParser:
             })
 
         return paragraphs
+
+    async def _ocr_pdf_page(self, path: Path, page_num: int) -> str:
+        if not settings.OCR_ENABLED or not llm_service.supports_ocr():
+            return ""
+
+        try:
+            data_url = await asyncio.to_thread(self._render_pdf_page_as_data_url, path, page_num)
+        except Exception:
+            return ""
+        if not data_url:
+            return ""
+
+        try:
+            text = await llm_service.ocr_image(
+                data_url,
+                prompt=(
+                    "Extract all visible text from this PDF page image. "
+                    "Return plain text only. Preserve formulas, tables, and section numbers when readable."
+                ),
+            )
+        except Exception:
+            return ""
+        return " ".join(text.split())
+
+    def _render_pdf_page_as_data_url(self, path: Path, page_num: int) -> str:
+        import pypdfium2 as pdfium  # type: ignore
+
+        document = pdfium.PdfDocument(str(path))
+        try:
+            if page_num < 1 or page_num > len(document):
+                return ""
+            page = document[page_num - 1]
+            bitmap = page.render(scale=max(float(settings.OCR_RENDER_DPI) / 72.0, 1.0))
+            pil_image = bitmap.to_pil()
+            try:
+                if pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+                from io import BytesIO
+
+                buffer = BytesIO()
+                pil_image.save(buffer, format="JPEG", quality=82, optimize=True)
+                encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+                return f"data:image/jpeg;base64,{encoded}"
+            finally:
+                page.close()
+                bitmap.close()
+        finally:
+            document.close()
+
+    def _chunk_plain_text(self, text: str) -> List[str]:
+        blocks = [block.strip() for block in re.split(r"\n{2,}", text) if block.strip()]
+        if not blocks:
+            compact = " ".join(str(text or "").split())
+            blocks = [compact] if compact else []
+
+        chunks: List[str] = []
+        current: List[str] = []
+        current_chars = 0
+
+        for block in blocks:
+            next_chars = current_chars + len(block) + (2 if current else 0)
+            if current and current_chars >= self.PDF_TARGET_CHUNK_CHARS and next_chars > self.PDF_MAX_CHUNK_CHARS:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_chars = 0
+
+            current.append(block)
+            current_chars += len(block) + (2 if current_chars else 0)
+            if current_chars >= self.PDF_MAX_CHUNK_CHARS:
+                chunks.append("\n\n".join(current))
+                current = []
+                current_chars = 0
+
+        if current:
+            chunks.append("\n\n".join(current))
+
+        return chunks
 
     def _merge_pdf_paragraphs(self, paragraphs: List[dict]) -> List[dict]:
         """Merge short adjacent PDF paragraphs into larger semantic chunks."""

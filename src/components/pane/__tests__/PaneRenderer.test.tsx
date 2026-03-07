@@ -483,7 +483,11 @@ describe('PaneRenderer', () => {
     fireEvent.click(screen.getByText('Accept All'));
 
     await waitFor(() => {
-      expect(m.apiFinalizeDiffEvent).toHaveBeenCalled();
+      expect(m.apiFinalizeDiffEvent).toHaveBeenCalledWith(
+        'f-md',
+        'event-1',
+        expect.not.objectContaining({ finalContent: expect.anything() })
+      );
       expect(m.setFileContentStatic).toHaveBeenCalledWith('f-md', 'final content');
       expect(m.loadFiles).toHaveBeenCalled();
       expect(m.getFileVersionsStatic).toHaveBeenCalledWith('f-md');
@@ -656,7 +660,6 @@ describe('PaneRenderer', () => {
         'f-md',
         'event-2',
         expect.objectContaining({
-          finalContent: 'old original',
           summary: 'Reject all pending diff lines',
         })
       );
@@ -807,10 +810,10 @@ describe('PaneRenderer', () => {
         event: {
           id: 'event-fallback',
           old_content: 'old-fallback',
-          new_content: 'new-fallback',
+          new_content: 'new-a\ny',
           summary: '',
           lines: [
-            { id: 'p1', line_no: 1, old_line: '', new_line: '', decision: 'pending' },
+            { id: 'p1', line_no: 1, old_line: 'old-a', new_line: 'new-a', decision: 'pending' },
             { id: 'p2', line_no: 2, old_line: 'x', new_line: 'y', decision: 'pending' },
           ],
         },
@@ -847,9 +850,9 @@ describe('PaneRenderer', () => {
       expect(m.apiFinalizeDiffEvent).toHaveBeenCalledWith(
         'f-md',
         'event-fallback',
-        expect.objectContaining({ finalContent: 'new-fallback' })
+        expect.not.objectContaining({ finalContent: expect.anything() })
       );
-      expect(m.setFileContentStatic).toHaveBeenCalledWith('f-md', 'new-fallback');
+      expect(m.setFileContentStatic).toHaveBeenCalledWith('f-md', 'new-a\ny');
     });
 
     fireEvent.click(screen.getByTitle('New Tab'));

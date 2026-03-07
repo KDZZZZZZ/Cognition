@@ -47,15 +47,16 @@ export function NewItemDialog({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+    <div data-testid="new-item-dialog-backdrop" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
       <form
+        data-testid="new-item-dialog"
         onSubmit={handleSubmit}
         className="rounded-lg shadow-lg p-4 w-80 border border-theme-border/25 paper-divider"
         style={{ backgroundColor: 'var(--theme-surface)' }}
         onKeyDown={handleKeyDown}
       >
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold tracking-[0.03em] text-theme-text/80">{title}</h3>
+          <h3 data-testid="new-item-dialog-title" className="text-sm font-semibold tracking-[0.03em] text-theme-text/80">{title}</h3>
           <button
             type="button"
             onClick={onClose}
@@ -65,6 +66,7 @@ export function NewItemDialog({
           </button>
         </div>
         <input
+          data-testid="new-item-dialog-input"
           ref={inputRef}
           type="text"
           value={name}
@@ -75,6 +77,7 @@ export function NewItemDialog({
         />
         <div className="flex justify-end gap-2 mt-3">
           <button
+            data-testid="new-item-dialog-cancel"
             type="button"
             onClick={onClose}
             className="px-3 py-1.5 text-sm text-theme-text/70 hover:bg-theme-text/8 rounded-md transition-colors"
@@ -82,6 +85,7 @@ export function NewItemDialog({
             Cancel
           </button>
           <button
+            data-testid="new-item-dialog-submit"
             type="submit"
             className="px-3 py-1.5 text-sm bg-theme-text text-theme-bg rounded-md hover:opacity-90 transition-opacity"
           >

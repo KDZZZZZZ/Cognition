@@ -308,7 +308,7 @@ describe('FileTree', () => {
 
     fireEvent.click(screen.getByTitle('Add at current path'));
     fireEvent.click(screen.getByText('Upload File'));
-    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.body.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [] } });
     expect(m.uploadFile).not.toHaveBeenCalled();
   });

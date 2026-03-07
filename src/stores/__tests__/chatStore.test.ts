@@ -76,6 +76,43 @@ describe('useChatStore', () => {
     expect(setSessionState).toHaveBeenCalled();
   });
 
+  it('fills default read permissions for visible context files', async () => {
+    getSessionPermissions.mockReturnValueOnce({ note1: 'write' });
+    mockApi.getViewport.mockResolvedValueOnce({
+      success: true,
+      data: { viewports: [{ file_id: 'pdf1', page: 2, timestamp: new Date().toISOString() }] },
+    });
+    mockApi.chatCompletion.mockResolvedValueOnce({
+      success: true,
+      data: {
+        message_id: 'assistant-perm',
+        content: 'done',
+        timestamp: new Date().toISOString(),
+        tool_calls: [],
+        tool_results: [],
+        citations: [],
+      },
+    });
+
+    await useChatStore.getState().sendMessageForSession('s-perm', 'hello', ['note1', 'pdf1']);
+
+    expect(mockApi.chatCompletion).toHaveBeenCalledWith(
+      's-perm',
+      'hello',
+      ['note1', 'pdf1'],
+      'kimi-latest',
+      true,
+      expect.objectContaining({
+        permissions: {
+          note1: 'write',
+          pdf1: 'read',
+        },
+        activeFileId: 'pdf1',
+        activePage: 2,
+      })
+    );
+  });
+
   it('handles sendMessageForSession response failure and thrown error', async () => {
     mockApi.getViewport.mockResolvedValueOnce({ success: false });
     mockApi.chatCompletion.mockResolvedValueOnce({ success: false, error: 'backend fail' });

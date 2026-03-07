@@ -311,6 +311,7 @@ async def build_task_registry_context_pack(
     sections = build_step_executor_sections(
         global_rules_text=global_rules_text,
         step_definition=step_definition,
+        current_user_message=current_user_message,
         registry_snapshot=registry_snapshot,
         active_task=active_task,
         active_step=active_step,
@@ -410,6 +411,7 @@ async def build_task_registry_context_pack(
             emergency_sections = build_step_executor_sections(
                 global_rules_text=global_rules_text,
                 step_definition=step_definition,
+                current_user_message=current_user_message,
                 registry_snapshot=registry_snapshot,
                 active_task=active_task,
                 active_step=active_step,

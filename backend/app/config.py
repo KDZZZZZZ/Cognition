@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     }
 
     # AI/LLM
+    SILICONFLOW_API_KEY: str = ""
+    SILICONFLOW_BASE_URL: str = "https://api.siliconflow.cn/v1"
+    SILICONFLOW_OCR_MODEL: str = "deepseek-ai/DeepSeek-OCR"
     MOONSHOT_API_KEY: str = ""
     MOONSHOT_BASE_URL: str = "https://api.moonshot.cn/v1"
     OPENAI_API_KEY: str = ""
@@ -36,8 +39,17 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEFAULT_MODEL: str = "kimi-latest"
-    EMBEDDING_MODEL: str = ""
+    DEFAULT_MODEL: str = "Pro/MiniMaxAI/MiniMax-M2.5"
+    EMBEDDING_MODEL: str = "Qwen/Qwen3-Embedding-8B"
+    EMBEDDING_DIMENSIONS: int = 1024
+    RERANK_MODEL: str = "Qwen/Qwen3-Reranker-8B"
+    RERANK_ENABLED: bool = True
+    RERANK_TOP_N: int = 24
+    EMBEDDING_PDF_PAGE_WINDOW: int = 5
+    OCR_ENABLED: bool = True
+    OCR_RENDER_DPI: int = 160
+    OCR_MAX_OUTPUT_CHARS: int = 24000
+    OCR_TIMEOUT_SECONDS: float = 90.0
     LLM_TRUST_ENV_PROXY: bool = False
     DASHSCOPE_API_KEY: str = ""
     DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1"
@@ -51,6 +63,10 @@ class Settings(BaseSettings):
 
     # Available Models
     AVAILABLE_MODELS: dict = {
+        "Pro/MiniMaxAI/MiniMax-M2.5": {"provider": "siliconflow", "thinking": False},
+        "deepseek-ai/DeepSeek-OCR": {"provider": "siliconflow", "thinking": False, "vision": True},
+        "Qwen/Qwen3-Embedding-8B": {"provider": "siliconflow", "embedding": True},
+        "Qwen/Qwen3-Reranker-8B": {"provider": "siliconflow", "rerank": True},
         "kimi-latest": {"provider": "moonshot", "thinking": False},
         "moonshot-v1-8k": {"provider": "moonshot", "thinking": False},
         "moonshot-v1-32k": {"provider": "moonshot", "thinking": False},
@@ -70,7 +86,7 @@ class Settings(BaseSettings):
 
     # Visual Retrieval (multimodal long-document reading)
     VISUAL_RETRIEVAL_ENABLED: bool = True
-    VISUAL_RETRIEVAL_MODEL: str = "kimi-k2.5"
+    VISUAL_RETRIEVAL_MODEL: str = "deepseek-ai/DeepSeek-OCR"
     VISUAL_RETRIEVAL_MAX_PAGES_PER_FILE: int = 120
     VISUAL_RETRIEVAL_TOP_K: int = 4
     VISUAL_RETRIEVAL_CANDIDATES: int = 20

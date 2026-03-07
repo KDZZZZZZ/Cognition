@@ -122,6 +122,7 @@ describe('SessionView', () => {
           updatedAt: new Date().toISOString(),
         },
       ],
+      getTaskRegistry: () => null,
       getPendingPrompt: () => ({
         taskId: 't1',
         requestedAt: new Date().toISOString(),
@@ -228,6 +229,7 @@ describe('SessionView', () => {
         contextFiles: ['f1'],
       }),
       getTaskBoard: () => [],
+      getTaskRegistry: () => null,
       getPendingPrompt: () => null,
       getSessionReferences: () => [],
     };
@@ -279,6 +281,7 @@ describe('SessionView', () => {
       getMessagesForSession: () => [],
       getActiveTask: () => null,
       getTaskBoard: () => [],
+      getTaskRegistry: () => null,
       getPendingPrompt: () => null,
       getSessionReferences: () => [],
     };
@@ -315,6 +318,7 @@ describe('SessionView', () => {
       getMessagesForSession: () => [],
       getActiveTask: () => null,
       getTaskBoard: () => [],
+      getTaskRegistry: () => null,
       getPendingPrompt: () => null,
     };
 
@@ -356,6 +360,7 @@ describe('SessionView', () => {
         contextFiles: [],
       }),
       getTaskBoard: () => [],
+      getTaskRegistry: () => null,
       getPendingPrompt: () => null,
       getSessionReferences: () => [],
     };
@@ -375,7 +380,7 @@ describe('SessionView', () => {
     expect(screen.queryByText('References')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText('show'));
-    expect(await screen.findByText(/No registered tasks yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No task registry yet/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('Retry'));
     expect(mocks.retryLastTask).toHaveBeenCalledWith('s1');
@@ -434,6 +439,7 @@ describe('SessionView', () => {
           updatedAt: new Date().toISOString(),
         },
       ],
+      getTaskRegistry: () => null,
       getPendingPrompt: () => ({
         taskId: 't-cancel',
         requestedAt: new Date().toISOString(),

@@ -110,3 +110,59 @@ export function hasAnyToolName(responseBody: any, candidates: string[]): boolean
   const names = extractToolNames(responseBody);
   return candidates.some((candidate) => names.includes(candidate));
 }
+
+export function expectNoEditorTools(responseBody: any): string[] {
+  const tools = extractToolNames(responseBody);
+  const editorTools = tools.filter((tool) =>
+    ['update_file', 'update_block', 'insert_block', 'delete_block', 'add_file_charts_to_note'].includes(tool)
+  );
+  if (editorTools.length > 0) {
+    throw new Error(`Expected no editor tools, got [${editorTools.join(', ')}]`);
+  }
+  return tools;
+}
+
+export function expectAnyToolName(responseBody: any, candidates: string[]): string {
+  const tools = extractToolNames(responseBody);
+  const matched = candidates.find((candidate) => tools.includes(candidate));
+  if (!matched) {
+    throw new Error(`Expected one of [${candidates.join(', ')}], got [${tools.join(', ')}]`);
+  }
+  return matched;
+}
+
+export function expectStructuredPaperCollection(
+  responseBody: any,
+  options?: { requireUnconfirmedMarker?: boolean }
+): {
+  hasQueryGroup: boolean;
+  hasFilters: boolean;
+  hasCandidates: boolean;
+  hasReadingOrder: boolean;
+  hasUnconfirmedMarker: boolean;
+} {
+  const content = String(getData(responseBody)?.content || '');
+  const hasQueryGroup = /(query|检索词|关键词|query 组|query组)/i.test(content);
+  const hasFilters = /(inclusion|exclusion|筛选标准|排除|必须|加分)/i.test(content);
+  const hasCandidates = /(top\s*\d|候选|必读|可选|baseline|对照组|综述|教程)/i.test(content);
+  const hasReadingOrder = /(reading order|阅读顺序|先读|section|abstract -> method|abstract→method)/i.test(content);
+  const hasUnconfirmedMarker = /(待确认|无法确认|仅基于当前论文|not directly supported|insufficient evidence)/i.test(content);
+
+  if (!hasQueryGroup || !hasFilters || !hasCandidates || !hasReadingOrder) {
+    throw new Error(
+      `Paper collection response missing structure: query=${hasQueryGroup}, filters=${hasFilters}, candidates=${hasCandidates}, reading=${hasReadingOrder}`
+    );
+  }
+
+  if (options?.requireUnconfirmedMarker && !hasUnconfirmedMarker) {
+    throw new Error('Paper collection response did not include an uncertainty marker such as "待确认".');
+  }
+
+  return {
+    hasQueryGroup,
+    hasFilters,
+    hasCandidates,
+    hasReadingOrder,
+    hasUnconfirmedMarker,
+  };
+}

@@ -52,6 +52,21 @@ function readTabDragData(event: React.DragEvent): TabDragData | null {
   return activeTabDragData;
 }
 
+function composePendingDiffContent(
+  lines: DiffEventDTO['lines'],
+  fallbackDecision: 'accepted' | 'rejected'
+): string {
+  return [...lines]
+    .sort((left, right) => left.line_no - right.line_no)
+    .map((line) => {
+      if (line.decision === 'rejected') return line.old_line;
+      if (line.decision === 'accepted') return line.new_line;
+      return fallbackDecision === 'rejected' ? line.old_line : line.new_line;
+    })
+    .filter((line): line is string => line !== null)
+    .join('\n');
+}
+
 export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLeave, onDrop }: PaneRendererProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [draggedTabInfo, setDraggedTabInfo] = useState<{ sourcePaneId: string; tabId: string } | null>(null);
@@ -459,15 +474,25 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const finalizePendingDiff = useCallback(async (acceptAll: boolean) => {
     if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
 
+    if (!acceptAll) {
+      const remainingPending = pendingDiffEvent.lines.filter((line) => line.decision === 'pending');
+      await Promise.all(
+        remainingPending.map((line) =>
+          api.updateDiffLineDecision(activeTab.id, pendingDiffEvent.id, line.id, 'rejected')
+        )
+      );
+    }
+
     const response = await api.finalizeDiffEvent(activeTab.id, pendingDiffEvent.id, {
-      finalContent: acceptAll ? pendingDiffEvent.new_content : pendingDiffEvent.old_content,
       summary: acceptAll ? 'Accept all pending diff lines' : 'Reject all pending diff lines',
       author: 'human',
     });
 
     if (response.success) {
       pendingDiffRequestRef.current += 1;
-      const finalContent = response.data?.final_content || (acceptAll ? pendingDiffEvent.new_content : pendingDiffEvent.old_content);
+      const finalContent =
+        response.data?.final_content ||
+        composePendingDiffContent(pendingDiffEvent.lines, acceptAll ? 'accepted' : 'rejected');
       setFileContent(finalContent);
       previousContentRef.current = finalContent;
       setPendingDiffEvent(null);
@@ -478,9 +503,24 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     }
   }, [activeTab, pendingDiffEvent]);
 
+  const diffLines = useMemo(
+    () => pendingDiffEvent?.lines || [],
+    [pendingDiffEvent]
+  );
+
   const pendingLines = useMemo(
     () => pendingDiffEvent?.lines.filter((line) => line.decision === 'pending') || [],
     [pendingDiffEvent]
+  );
+
+  const acceptedLineCount = useMemo(
+    () => diffLines.filter((line) => line.decision === 'accepted' && line.old_line !== line.new_line).length,
+    [diffLines]
+  );
+
+  const rejectedLineCount = useMemo(
+    () => diffLines.filter((line) => line.decision === 'rejected').length,
+    [diffLines]
   );
 
   const openSessions = getAllOpenTabs()
@@ -489,7 +529,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
 
   return (
     <div
-      className={`flex-1 min-w-[320px] max-w-full flex flex-col border-r border-theme-border/30 paper-divider-dashed bg-theme-bg transition-all relative ${
+      className={`flex-1 min-h-0 min-w-[320px] max-w-full flex flex-col border-r border-theme-border/30 paper-divider-dashed bg-theme-bg transition-all relative ${
         isActive ? 'ring-1 ring-inset ring-theme-border/50 z-10' : 'opacity-95'
       }`}
       onClick={onActivate}
@@ -627,7 +667,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
           <X size={14} />
         </button>
       </div>
-      <div className="flex-1 overflow-hidden relative bg-theme-bg">
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden relative bg-theme-bg">
         {!activeTab ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text/40 pointer-events-none select-none">
             <div className="bg-theme-bg/50 p-4 rounded-full mb-3 border border-theme-border/10">
@@ -643,7 +683,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             onTogglePermission={(fileId, fileType) => togglePermission(activeTab.id, fileId, fileType)}
           />
         ) : activeTab.mode === 'diff' ? (
-          <div className="flex flex-col h-full bg-theme-bg">
+          <div data-testid="history-diff-view" className="flex flex-col h-full bg-theme-bg">
             <div
               className="px-3 py-2 border-b border-theme-border/30 paper-divider-dashed text-theme-text flex justify-between items-center text-xs"
               style={{ backgroundColor: 'var(--theme-surface)' }}
@@ -655,6 +695,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
 
               <div className="flex items-center gap-2">
                 <button
+                  data-testid="history-diff-exit"
                   onClick={() => {
                     clearDiff();
                     setTabMode(pane.id, activeTab.id, 'editor');
@@ -676,6 +717,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                   {/* Floating Action Buttons */}
                   <div className="absolute bottom-6 right-6 flex gap-2 shadow-lg rounded-lg overflow-hidden z-10">
                     <button
+                      data-testid="history-diff-accept-all"
                       onClick={() => {
                         updateFileContent(activeTab.id, activeDiff.newContent);
                         clearDiff();
@@ -686,6 +728,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                       Accept All
                     </button>
                     <button
+                      data-testid="history-diff-reject-all"
                       onClick={() => {
                         updateFileContent(activeTab.id, activeDiff.oldContent);
                         clearDiff();
@@ -728,7 +771,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
           </div>
         ) : activeTab.type === 'md' ? (
           pendingDiffEvent ? (
-            <div className="flex flex-col h-full bg-theme-bg">
+            <div data-testid="pending-diff-view" className="flex flex-col h-full bg-theme-bg">
               <div className="surface-panel bg-amber-50/70 px-3 py-2 border-b border-theme-border/20 text-theme-text text-xs">
                 <div className="flex justify-between items-center gap-3 flex-wrap">
                   <span className="flex items-center gap-2">
@@ -737,18 +780,23 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                     <span className="text-theme-text/55">
                       {pendingLines.length} pending line{pendingLines.length === 1 ? '' : 's'}
                     </span>
+                    <span className="text-theme-text/45">
+                      {acceptedLineCount} accepted · {rejectedLineCount} rejected
+                    </span>
                     {pendingDiffLoading && <span className="text-theme-text/50">Refreshing...</span>}
                   </span>
                 </div>
 
                 <div className="flex items-center gap-2 mt-2">
                   <button
+                    data-testid="pending-diff-accept-all"
                     onClick={() => finalizePendingDiff(true)}
                     className="px-3 py-1 bg-green-700 text-white rounded hover:bg-green-800"
                   >
                     Accept All
                   </button>
                   <button
+                    data-testid="pending-diff-reject-all"
                     onClick={() => finalizePendingDiff(false)}
                     className="px-3 py-1 bg-red-700 text-white rounded hover:bg-red-800"
                   >
@@ -761,7 +809,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                   oldContent={pendingDiffEvent.old_content}
                   newContent={pendingDiffEvent.new_content}
                   mode="inline"
-                  pendingLines={pendingLines}
+                  pendingLines={diffLines}
                   selectedLineId={selectedLineId}
                   onSelectLine={setSelectedLineId}
                   onApplyLineDecision={(lineId, decision) => {

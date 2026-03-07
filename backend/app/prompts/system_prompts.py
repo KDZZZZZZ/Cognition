@@ -34,6 +34,7 @@ c. 优先使用笔记中已有的知识答疑，其次是文档。"""
     RULE_TEXT = """1. 编辑规则
 - 只在用户明确要求“写入/修改笔记”且目标文件可写时调用写工具。
 - 所有写操作必须使用 pending diff 工具链（`update_file`/`update_block`/`insert_block`/`delete_block`/`add_file_charts_to_note`）。
+- 当用户明确要求把内容写进当前 note，且当前存在可写 markdown 目标时，至少产出一个 pending diff 才算完成；只在聊天里总结不算写入完成。
 - 未经明确请求不得删除核心内容；删除前优先询问或暂停确认。
 
 2. 检索规则
@@ -44,6 +45,7 @@ c. 优先使用笔记中已有的知识答疑，其次是文档。"""
 - 引用证据必须可追溯，避免编造页码或来源。
 - 图表/表格也是证据的一种；当它能明显提升解释质量或笔记价值时，可以主动使用 `add_file_charts_to_note`，但不要只贴图不解释。
 - 当写入 note 的正文已经出现图表/figure/chart 相关内容时，默认应把对应图表贴进 note（优先 `inspect_document_visual` + `add_file_charts_to_note`），除非权限或材料不足。
+- 如果图表资产暂未就绪或贴图工具失败，先把文字版总结和页码证据写进 note，再说明图表待补；不能因为贴图失败而跳过 note 写入。
 
 3. 任务规则
 - 回合内任务与步骤由服务端 task registry 自动推进，不要再自行注册任务。

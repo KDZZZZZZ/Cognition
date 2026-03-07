@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { api } from '../api/client';
-import type { FileMetadata, DocumentChunk, FileVersion } from '../api/client';
+import type { FileMetadata, DocumentChunk, FileVersion, UploadProgressSnapshot } from '../api/client';
 
 interface FileState {
   files: FileMetadata[];
@@ -15,7 +15,13 @@ interface FileState {
   // Actions
   loadFiles: () => Promise<void>;
   selectFile: (file: FileMetadata | null) => void;
-  uploadFile: (file: File, parentId?: string | null) => Promise<string | null>;
+  uploadFile: (
+    file: File,
+    parentId?: string | null,
+    options?: {
+      onUploadProgress?: (snapshot: UploadProgressSnapshot) => void;
+    }
+  ) => Promise<string | null>;
   getFileContent: (fileId: string) => Promise<string | null>;
   setFileContent: (fileId: string, content: string) => void;
   updateFileContent: (fileId: string, content: string) => Promise<boolean>;
@@ -51,10 +57,10 @@ export const useFileStore = create<FileState>((set, get) => ({
 
   selectFile: (file) => set({ selectedFile: file }),
 
-  uploadFile: async (file, parentId) => {
+  uploadFile: async (file, parentId, options) => {
     set({ loading: true, error: null });
     try {
-      const response = await api.uploadFile(file, parentId);
+      const response = await api.uploadFile(file, parentId, options);
       if (response.success && response.data) {
         const fileId = response.data.file_id;
         // Reload files

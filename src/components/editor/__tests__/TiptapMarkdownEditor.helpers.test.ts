@@ -3,6 +3,8 @@ import {
   contentFingerprint,
   decodeHtmlEntities,
   detectMarkdownFeatures,
+  normalizeMathFormula,
+  normalizeMathMarkdownDelimiters,
   normalizeCopiedSelectionMarkdown,
   readDisplayMode,
   readHtmlAttr,
@@ -47,6 +49,14 @@ describe('TiptapMarkdownEditor helpers', () => {
 
     expect(readDisplayMode('data-display="yes"', false)).toBe(true);
     expect(readDisplayMode('display="0"', true)).toBe(false);
+  });
+
+  it('normalizes double-escaped markdown math formulas for rendering', () => {
+    expect(normalizeMathFormula(String.raw`M\\_\\theta`)).toBe(String.raw`M_\theta`);
+    expect(normalizeMathFormula(String.raw`\\tau(\\cdot)`)).toBe(String.raw`\tau(\cdot)`);
+    expect(normalizeMathMarkdownDelimiters(String.raw`$M\\_\\theta$ and $\\tau(\\cdot)$`)).toBe(
+      String.raw`$M_\theta$ and $\tau(\cdot)$`
+    );
   });
 
   it('decodes html attrs and produces stable fingerprints', () => {

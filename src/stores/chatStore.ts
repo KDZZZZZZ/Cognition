@@ -11,7 +11,7 @@ import type {
 } from '../api/client';
 import { useSessionStore } from './sessionStore';
 
-const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'kimi-latest';
+const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'Pro/MiniMaxAI/MiniMax-M2.5';
 
 interface ActiveTaskState {
   taskId: string;
@@ -659,7 +659,7 @@ export const useChatStore = create<ChatState>()(
             ? `${preamble}\n\nUser request:\n${message}`
             : message;
 
-          const sessionPermissions = useSessionStore.getState().getSessionPermissions(sessionId);
+          const storedPermissions = useSessionStore.getState().getSessionPermissions(sessionId);
           let activeFileId = options.activeFileId;
           let activePage = options.activePage;
           let activeVisibleUnit = options.activeVisibleUnit;
@@ -690,6 +690,16 @@ export const useChatStore = create<ChatState>()(
             } catch {
               // Viewport context is optional; continue without it.
             }
+          }
+
+          const sessionPermissions = { ...storedPermissions };
+          for (const fileId of contextFiles) {
+            if (!sessionPermissions[fileId]) {
+              sessionPermissions[fileId] = 'read';
+            }
+          }
+          if (activeFileId && !sessionPermissions[activeFileId]) {
+            sessionPermissions[activeFileId] = 'read';
           }
 
           const response = await api.chatCompletion(

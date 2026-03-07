@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 from datetime import datetime
 from typing import Any, Optional
 
@@ -12,21 +13,86 @@ from app.models import DiffEvent, DiffEventStatus, DiffLineSnapshot, LineDecisio
 def build_diff_line_snapshots(old_content: str, new_content: str) -> list[dict[str, Any]]:
     old_lines = old_content.splitlines()
     new_lines = new_content.splitlines()
-    max_len = max(len(old_lines), len(new_lines))
+    matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
 
     snapshots: list[dict[str, Any]] = []
-    for idx in range(max_len):
-        old_line = old_lines[idx] if idx < len(old_lines) else None
-        new_line = new_lines[idx] if idx < len(new_lines) else None
-        decision = LineDecision.PENDING if old_line != new_line else LineDecision.ACCEPTED
-        snapshots.append(
-            {
-                "line_no": idx + 1,
-                "old_line": old_line,
-                "new_line": new_line,
-                "decision": decision,
-            }
-        )
+    line_no = 1
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            for old_line, new_line in zip(old_lines[i1:i2], new_lines[j1:j2]):
+                snapshots.append(
+                    {
+                        "line_no": line_no,
+                        "old_line": old_line,
+                        "new_line": new_line,
+                        "decision": LineDecision.ACCEPTED,
+                    }
+                )
+                line_no += 1
+            continue
+
+        if tag == "replace":
+            shared = min(i2 - i1, j2 - j1)
+            for offset in range(shared):
+                snapshots.append(
+                    {
+                        "line_no": line_no,
+                        "old_line": old_lines[i1 + offset],
+                        "new_line": new_lines[j1 + offset],
+                        "decision": LineDecision.PENDING,
+                    }
+                )
+                line_no += 1
+
+            for old_line in old_lines[i1 + shared:i2]:
+                snapshots.append(
+                    {
+                        "line_no": line_no,
+                        "old_line": old_line,
+                        "new_line": None,
+                        "decision": LineDecision.PENDING,
+                    }
+                )
+                line_no += 1
+
+            for new_line in new_lines[j1 + shared:j2]:
+                snapshots.append(
+                    {
+                        "line_no": line_no,
+                        "old_line": None,
+                        "new_line": new_line,
+                        "decision": LineDecision.PENDING,
+                    }
+                )
+                line_no += 1
+            continue
+
+        if tag == "delete":
+            for old_line in old_lines[i1:i2]:
+                snapshots.append(
+                    {
+                        "line_no": line_no,
+                        "old_line": old_line,
+                        "new_line": None,
+                        "decision": LineDecision.PENDING,
+                    }
+                )
+                line_no += 1
+            continue
+
+        if tag == "insert":
+            for new_line in new_lines[j1:j2]:
+                snapshots.append(
+                    {
+                        "line_no": line_no,
+                        "old_line": None,
+                        "new_line": new_line,
+                        "decision": LineDecision.PENDING,
+                    }
+                )
+                line_no += 1
+
     return snapshots
 
 

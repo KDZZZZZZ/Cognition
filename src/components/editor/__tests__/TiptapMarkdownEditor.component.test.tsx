@@ -104,6 +104,7 @@ vi.mock('../extensions/InlineMathMarkdownStorage', () => ({
 
 vi.mock('../extensions/MathSyntaxBridge', () => ({
   MathSyntaxBridge: { name: 'math-syntax-bridge' },
+  createBridgeTransaction: vi.fn(() => null),
 }));
 
 describe('TiptapMarkdownEditor component', () => {
