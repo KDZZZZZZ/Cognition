@@ -3,8 +3,8 @@ import remarkMath from 'remark-math';
 import remarkGfm from 'remark-gfm';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
-import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import { markdownCodeBlockClassName, markdownProseClassName, renderKatexToHtml, diffInlineDeleteClassName, diffInlineInsertClassName } from './markdownShared';
 
 interface MarkdownContentProps {
   content: string;
@@ -17,7 +17,7 @@ export function MarkdownContent({ content, className, variant = 'default' }: Mar
 
   return (
     <div
-      className={`prose prose-sm max-w-none text-theme-text prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-theme-text prose-p:my-2 prose-p:text-theme-text prose-strong:text-theme-text prose-li:my-1 prose-li:text-theme-text prose-a:text-theme-text prose-blockquote:text-theme-text/72 prose-pre:bg-transparent prose-pre:text-theme-text prose-pre:p-0 prose-code:text-theme-text prose-code:before:content-none prose-code:after:content-none [&_.katex-display]:my-1 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display>.katex]:inline-block [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 ${className || ''}`}
+      className={`${markdownProseClassName} ${className || ''}`}
     >
       <ReactMarkdown
         remarkPlugins={[remarkMath, remarkGfm]}
@@ -25,7 +25,7 @@ export function MarkdownContent({ content, className, variant = 'default' }: Mar
         components={{
           pre: ({ node, ...props }) => (
             <pre
-              className="overflow-x-auto rounded-md border border-theme-border/20 p-2 paper-divider"
+              className={markdownCodeBlockClassName}
               style={{
                 backgroundColor: 'color-mix(in srgb, var(--theme-surface-muted) 88%, transparent)',
                 color: 'var(--theme-text)',
@@ -46,7 +46,7 @@ export function MarkdownContent({ content, className, variant = 'default' }: Mar
             }
             return (
               <code
-                className={`${codeClassName || ''} ${isDiffVariant ? 'rounded-sm border border-emerald-500/24 bg-emerald-500/16 px-1 py-0.5 text-[0.92em] text-theme-text' : 'rounded bg-theme-text/8 px-1 py-0.5 text-xs text-theme-text'}`}
+                className={`${codeClassName || ''} ${isDiffVariant ? `${diffInlineInsertClassName} border border-emerald-500/24 text-[0.92em]` : 'rounded bg-theme-text/8 px-1 py-0.5 text-xs text-theme-text'}`}
                 style={isDiffVariant ? { fontFamily: 'inherit' } : undefined}
                 {...props}
               >
@@ -56,7 +56,7 @@ export function MarkdownContent({ content, className, variant = 'default' }: Mar
           },
           del: ({ node, className: delClassName, children, ...props }: any) => (
             <del
-              className={`${delClassName || ''} ${isDiffVariant ? 'rounded-sm bg-rose-500/14 px-1 py-0.5 text-theme-text/72 decoration-rose-700/80' : ''}`}
+              className={`${delClassName || ''} ${isDiffVariant ? diffInlineDeleteClassName : ''}`}
               {...props}
             >
               {children}
@@ -67,15 +67,11 @@ export function MarkdownContent({ content, className, variant = 'default' }: Mar
             const latex = dataAttrs['data-latex'];
             const isDisplayMode = dataAttrs['data-display'] === 'yes';
             if (latex) {
-              try {
-                const html = katex.renderToString(String(latex), {
-                  throwOnError: false,
-                  displayMode: isDisplayMode,
-                });
+              const html = renderKatexToHtml(String(latex), isDisplayMode);
+              if (html) {
                 return <span dangerouslySetInnerHTML={{ __html: html }} />;
-              } catch {
-                return <span className="text-red-600">{String(latex)}</span>;
               }
+              return <span className="text-red-600">{String(latex)}</span>;
             }
             return (
               <span className={spanClassName} {...props}>

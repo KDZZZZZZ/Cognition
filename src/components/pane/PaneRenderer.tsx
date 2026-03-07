@@ -457,17 +457,32 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     setIsDragOver(false);
   }, [pane.id, moveTabToPane, onDrop]);
 
-  const applyLineDecision = useCallback(async (decision: 'accepted' | 'rejected', lineId?: string) => {
+  const applyLineDecision = useCallback(async (decision: 'accepted' | 'rejected', lineId?: string | string[]) => {
     if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
 
-    const targetLine =
-      pendingDiffEvent.lines.find((line) => line.id === lineId) ||
-      pendingDiffEvent.lines.find((line) => line.id === selectedLineId) ||
-      pendingDiffEvent.lines.find((line) => line.decision === 'pending');
+    const requestedLineIds = Array.isArray(lineId)
+      ? lineId
+      : lineId
+        ? [lineId]
+        : selectedLineId
+          ? [selectedLineId]
+          : [];
 
-    if (!targetLine) return;
+    const targetLines = requestedLineIds.length > 0
+      ? pendingDiffEvent.lines.filter((line) => requestedLineIds.includes(line.id))
+      : [];
 
-    await api.updateDiffLineDecision(activeTab.id, pendingDiffEvent.id, targetLine.id, decision);
+    if (targetLines.length === 0) {
+      const fallbackLine = pendingDiffEvent.lines.find((line) => line.decision === 'pending');
+      if (!fallbackLine) return;
+      targetLines.push(fallbackLine);
+    }
+
+    await Promise.all(
+      targetLines.map((line) =>
+        api.updateDiffLineDecision(activeTab.id, pendingDiffEvent.id, line.id, decision)
+      )
+    );
     await loadPendingDiffForFile(activeTab.id);
   }, [activeTab, loadPendingDiffForFile, pendingDiffEvent, selectedLineId]);
 
