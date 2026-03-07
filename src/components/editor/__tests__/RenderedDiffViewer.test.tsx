@@ -94,4 +94,45 @@ describe('RenderedDiffViewer', () => {
     expect(container.textContent).toContain('c');
     expect(container.textContent).toContain('d');
   });
+
+  it('keeps table rows renderable by including required markdown context', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'| Dataset | Score |\n| --- | --- |\n| MMLU | 54.1 |'}
+        newContent={'| Dataset | Score |\n| --- | --- |\n| MMLU | 54.0 |'}
+        mode="split"
+      />
+    );
+
+    expect(container.querySelector('table')).not.toBeNull();
+    expect(Array.from(container.querySelectorAll('del')).some((element) => element.textContent === '1')).toBe(true);
+    expect(Array.from(container.querySelectorAll('code')).some((element) => element.textContent === '0')).toBe(true);
+  });
+
+  it('renders formatting-only markdown changes without leaking raw markers', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'- 时变风险规避阈值 $\\tau(t)$'}
+        newContent={'- **时变风险规避阈值** $\\tau(t)$'}
+        mode="split"
+      />
+    );
+
+    expect(container.textContent).not.toContain('**');
+    expect(container.querySelector('strong')).not.toBeNull();
+  });
+
+  it('keeps fenced code blocks renderable by carrying code fence context', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'```ts\nconst answer = 42;\n```'}
+        newContent={'```ts\nconst answer = 43;\n```'}
+        mode="split"
+      />
+    );
+
+    expect(container.querySelector('pre')).not.toBeNull();
+    expect(container.textContent).toContain('const answer = 43;');
+    expect(container.textContent).not.toContain('```');
+  });
 });

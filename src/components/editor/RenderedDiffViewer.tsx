@@ -48,8 +48,15 @@ function escapeHtml(text: string) {
     .replace(/>/g, '&gt;');
 }
 
+function canUseMarkdownStrikethrough(text: string) {
+  return text.length > 0 && !/[\n<>`$]/.test(text);
+}
+
 function wrapRemovedSegment(text: string) {
   if (!text) return '';
+  if (canUseMarkdownStrikethrough(text)) {
+    return `~~${text.replace(/~/g, '\\~')}~~`;
+  }
   return `<del>${escapeHtml(text)}</del>`;
 }
 
@@ -148,6 +155,110 @@ function buildMergedMarkdown(oldText: string | null, newText: string | null) {
   return merged;
 }
 
+function rowContentText(row: DiffRenderRow) {
+  return row.newText ?? row.oldText ?? '';
+}
+
+function normalizeFormattingPlainText(text: string) {
+  return text.replace(/(\*\*|__|~~)/g, '').replace(/(^|[\s(])([*_])(?=\S)|(?<=\S)([*_])(?=[\s).,!?:;]|$)/g, '$1').trim();
+}
+
+function isFormattingOnlyChange(oldText: string | null, newText: string | null) {
+  if (!oldText || !newText || oldText === newText) return false;
+  return normalizeFormattingPlainText(oldText) === normalizeFormattingPlainText(newText);
+}
+
+function markdownForRow(row: DiffRenderRow) {
+  if (row.status === 'equal') return rowContentText(row);
+  if (isFormattingOnlyChange(row.oldText, row.newText)) {
+    return row.newText ?? row.oldText ?? '';
+  }
+  return buildMergedMarkdown(row.oldText, row.newText);
+}
+
+function isTableLine(text: string) {
+  const trimmed = text.trim();
+  return trimmed.startsWith('|') && trimmed.includes('|', 1);
+}
+
+function isTableDelimiterLine(text: string) {
+  return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+(?:\s*:?-{3,}:?\s*)\|?\s*$/.test(text.trim());
+}
+
+function getTableBlockRange(rows: DiffRenderRow[], rowIndex: number) {
+  const line = rowContentText(rows[rowIndex]);
+  if (!isTableLine(line)) return null;
+
+  let start = rowIndex;
+  while (start > 0 && isTableLine(rowContentText(rows[start - 1]))) {
+    start -= 1;
+  }
+
+  let end = rowIndex;
+  while (end + 1 < rows.length && isTableLine(rowContentText(rows[end + 1]))) {
+    end += 1;
+  }
+
+  const blockLines = rows.slice(start, end + 1).map(rowContentText);
+  if (!blockLines.some(isTableDelimiterLine)) return null;
+  return { start, end };
+}
+
+function parseFenceLine(text: string) {
+  const match = text.match(/^\s*(`{3,}|~{3,})/);
+  if (!match) return null;
+  return { marker: match[1][0], length: match[1].length };
+}
+
+function getFenceBlockRange(rows: DiffRenderRow[], rowIndex: number) {
+  let openFence: { index: number; marker: string; length: number } | null = null;
+
+  for (let index = 0; index <= rowIndex; index += 1) {
+    const fence = parseFenceLine(rowContentText(rows[index]));
+    if (!fence) continue;
+
+    if (openFence && openFence.marker === fence.marker && fence.length >= openFence.length) {
+      openFence = null;
+    } else if (!openFence) {
+      openFence = { index, ...fence };
+    }
+  }
+
+  if (!openFence) return null;
+
+  for (let index = openFence.index + 1; index < rows.length; index += 1) {
+    const fence = parseFenceLine(rowContentText(rows[index]));
+    if (fence && fence.marker === openFence.marker && fence.length >= openFence.length) {
+      if (rowIndex <= index) {
+        return { start: openFence.index, end: index };
+      }
+      break;
+    }
+  }
+
+  return null;
+}
+
+function buildReviewMarkdown(rows: DiffRenderRow[], rowIndex: number) {
+  const tableRange = getTableBlockRange(rows, rowIndex);
+  if (tableRange) {
+    return rows
+      .slice(tableRange.start, tableRange.end + 1)
+      .map((row, index) => (tableRange.start + index === rowIndex ? markdownForRow(row) : rowContentText(row)))
+      .join('\n');
+  }
+
+  const fenceRange = getFenceBlockRange(rows, rowIndex);
+  if (fenceRange) {
+    return rows
+      .slice(fenceRange.start, fenceRange.end + 1)
+      .map((row) => rowContentText(row))
+      .join('\n');
+  }
+
+  return markdownForRow(rows[rowIndex]);
+}
+
 function rowTone(row: DiffRenderRow) {
   if (row.decision === 'accepted') return 'bg-emerald-500/65';
   if (row.decision === 'rejected') return 'bg-rose-500/65';
@@ -201,19 +312,23 @@ function ActionRail({
 }
 
 function ReviewRow({
+  rows,
+  rowIndex,
   row,
   selected,
   actionable,
   onSelectLine,
   onApplyLineDecision,
 }: {
+  rows: DiffRenderRow[];
+  rowIndex: number;
   row: DiffRenderRow;
   selected: boolean;
   actionable: boolean;
   onSelectLine?: (lineId: string) => void;
   onApplyLineDecision?: (lineId: string, decision: 'accepted' | 'rejected') => void;
 }) {
-  const mergedMarkdown = useMemo(() => buildMergedMarkdown(row.oldText, row.newText), [row.newText, row.oldText]);
+  const mergedMarkdown = useMemo(() => buildReviewMarkdown(rows, rowIndex), [rowIndex, rows]);
   const lineNumber = row.newLineNumber ?? row.oldLineNumber ?? row.reviewLineNumber;
 
   return (
@@ -293,6 +408,8 @@ export function RenderedDiffViewer({
             changedRows.map((row) => (
               <ReviewRow
                 key={row.id}
+                rows={rows}
+                rowIndex={rows.findIndex((candidate) => candidate.id === row.id)}
                 row={row}
                 selected={Boolean(selectedLineId) && row.id === selectedLineId}
                 actionable={Boolean(onApplyLineDecision && row.decision !== null)}
