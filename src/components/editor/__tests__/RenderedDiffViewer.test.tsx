@@ -32,11 +32,12 @@ describe('RenderedDiffViewer', () => {
       />
     );
 
-    expect(screen.getByText('Rendered Proposal')).toBeInTheDocument();
+    expect(screen.queryByText('Rendered Proposal')).not.toBeInTheDocument();
     expect(screen.queryByText(/^Modified$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Added$/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Accept line 2')).toBeInTheDocument();
     expect(screen.getByLabelText('Reject line 3')).toBeInTheDocument();
+    expect(screen.getAllByText((_, element) => element?.textContent?.includes('new paragraph with code') ?? false).length).toBeGreaterThan(0);
     expect(document.querySelector('.katex')).not.toBeNull();
 
     fireEvent.click(screen.getByLabelText('Accept line 2'));
@@ -57,13 +58,13 @@ describe('RenderedDiffViewer', () => {
       />
     );
 
-    expect(screen.getByText('Rendered Original')).toBeInTheDocument();
-    expect(screen.getByText('Rendered Modified')).toBeInTheDocument();
+    expect(screen.queryByText('Rendered Original')).not.toBeInTheDocument();
+    expect(screen.queryByText('Rendered Modified')).not.toBeInTheDocument();
     expect(screen.queryByText(/^Modified$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Added$/)).not.toBeInTheDocument();
     expect(screen.getAllByText((_, element) => element?.textContent === 'line B').length).toBeGreaterThan(0);
     expect(screen.getAllByText((_, element) => element?.textContent?.includes('line C') ?? false).length).toBeGreaterThan(0);
-    expect(screen.getAllByText((_, element) => element?.textContent === 'line C\nline D').length).toBeGreaterThan(0);
+    expect(screen.getAllByText((_, element) => element?.textContent === 'line D').length).toBeGreaterThan(0);
   });
 
   it('normalizes serialized math html before rendering diff previews and rows', () => {

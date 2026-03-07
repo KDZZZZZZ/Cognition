@@ -99,7 +99,7 @@ function RowMarkdownPreview({
   if (!text || !text.trim()) return null;
 
   return (
-    <div className="mb-1 rounded-md border border-theme-border/10 bg-theme-bg/82 px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+    <div className="min-w-0 px-0.5 py-0.5">
       <MarkdownContent
         content={text}
         className="prose-xs leading-5 [&_.katex-display]:my-0.5 [&_blockquote]:my-0 [&_h1]:my-0 [&_h2]:my-0 [&_h3]:my-0 [&_li]:my-0.5 [&_ol]:my-0 [&_p]:my-0 [&_pre]:my-0 [&_ul]:my-0"
@@ -116,7 +116,7 @@ function PreviewCard({
   className?: string;
 }) {
   return (
-    <div className="inline-block max-w-full rounded-lg border border-theme-border/12 bg-theme-bg/82 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+    <div className="block w-full rounded-lg border border-theme-border/12 bg-theme-bg/82 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
       <MarkdownContent
         content={content}
         className={className}
@@ -185,7 +185,7 @@ function ReviewRow({
 
   return (
     <div
-      className={`grid grid-cols-[18px_minmax(0,1fr)_minmax(0,1fr)] items-start gap-2 rounded-lg border px-1.5 py-1 transition-colors ${
+      className={`group grid grid-cols-[18px_minmax(0,1fr)_minmax(0,1fr)] items-start gap-2 rounded-lg border px-1.5 py-1 transition-colors ${
         selected
           ? 'border-theme-border/26 bg-theme-text/[0.045]'
           : 'border-theme-border/10 bg-theme-surface/28'
@@ -198,13 +198,17 @@ function ReviewRow({
         <ActionRail row={row} actionable={actionable} onApplyLineDecision={onApplyLineDecision} />
       </div>
 
-      <div className="min-w-0">
+      <div className="min-w-0 rounded-md border border-theme-border/10 bg-theme-bg/78 px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
         {showMarkdownPreview ? <RowMarkdownPreview text={row.oldText} /> : null}
-        <RowCell lineNumber={row.oldLineNumber} segments={row.oldSegments} status="old" />
+        <div className={showMarkdownPreview ? 'mt-1 border-t border-theme-border/8 pt-1 opacity-60 transition-opacity group-hover:opacity-90' : ''}>
+          <RowCell lineNumber={row.oldLineNumber} segments={row.oldSegments} status="old" />
+        </div>
       </div>
-      <div className="min-w-0">
+      <div className="min-w-0 rounded-md border border-theme-border/10 bg-theme-bg/78 px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
         {showMarkdownPreview ? <RowMarkdownPreview text={row.newText} /> : null}
-        <RowCell lineNumber={row.newLineNumber} segments={row.newSegments} status="new" />
+        <div className={showMarkdownPreview ? 'mt-1 border-t border-theme-border/8 pt-1 opacity-60 transition-opacity group-hover:opacity-90' : ''}>
+          <RowCell lineNumber={row.newLineNumber} segments={row.newSegments} status="new" />
+        </div>
       </div>
     </div>
   );
@@ -251,54 +255,57 @@ export function RenderedDiffViewer({
     [changedNewPreviewContent, normalizedNewContent]
   );
   const compactLayout = changedRows.length <= 2 && Math.max(oldPreviewContent.length, newPreviewContent.length) <= 240;
+  const showDocumentPreview = !compactLayout;
 
   return (
-    <div className={`flex h-full w-full flex-col bg-theme-bg text-sm ${compactLayout ? 'overflow-auto' : 'overflow-hidden'}`}>
-      <div
-        className={`border-b border-theme-border/18 ${
-          compactLayout ? 'shrink-0' : 'min-h-0 flex-[0_0_46%] overflow-hidden'
-        } ${mode === 'split' ? 'grid grid-cols-2 divide-x divide-theme-border/16' : ''}`}
-      >
-        {mode === 'split' ? (
-          <>
-            <div className={`${compactLayout ? 'shrink-0' : 'min-h-0 overflow-auto'} bg-theme-surface/45 px-3 py-2`}>
-              <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
-                Rendered Original
+    <div className={`flex w-full flex-col bg-theme-bg text-sm ${compactLayout ? 'overflow-auto' : 'h-full overflow-hidden'}`}>
+      {showDocumentPreview ? (
+        <div
+          className={`border-b border-theme-border/18 min-h-0 flex-[0_0_46%] overflow-hidden ${
+            mode === 'split' ? 'grid grid-cols-2 divide-x divide-theme-border/16' : ''
+          }`}
+        >
+          {mode === 'split' ? (
+            <>
+              <div className="min-h-0 overflow-auto bg-theme-surface/45 px-3 py-2">
+                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
+                  Rendered Original
+                </div>
+                <PreviewCard
+                  content={oldPreviewContent}
+                  className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
+                />
               </div>
-              <PreviewCard
-                content={oldPreviewContent}
-                className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
-              />
-            </div>
-            <div className={`${compactLayout ? 'shrink-0' : 'min-h-0 overflow-auto'} bg-theme-surface/45 px-3 py-2`}>
+              <div className="min-h-0 overflow-auto bg-theme-surface/45 px-3 py-2">
+                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
+                  Rendered Modified
+                </div>
+                <PreviewCard
+                  content={newPreviewContent}
+                  className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
+                />
+              </div>
+            </>
+          ) : (
+            <div className="min-h-0 overflow-auto bg-theme-surface/45 px-3 py-2">
               <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
-                Rendered Modified
+                Rendered Proposal
               </div>
               <PreviewCard
                 content={newPreviewContent}
                 className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
               />
             </div>
-          </>
-        ) : (
-          <div className={`${compactLayout ? 'shrink-0' : 'min-h-0 overflow-auto'} bg-theme-surface/45 px-3 py-2`}>
-            <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
-              Rendered Proposal
-            </div>
-            <PreviewCard
-              content={newPreviewContent}
-              className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
-            />
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      ) : null}
 
       <div
         className={`bg-theme-surface/16 px-2 py-1.5 ${
           compactLayout ? 'shrink-0' : 'min-h-0 flex-1 overflow-hidden'
         }`}
       >
-        <div className={`flex w-full flex-col gap-1.5 ${compactLayout ? '' : 'h-full overflow-auto pr-1'}`}>
+        <div className={`flex w-full flex-col ${compactLayout ? 'gap-2' : 'h-full gap-1.5 overflow-auto pr-1'}`}>
           {changedRows.length === 0 ? (
             <div className="rounded-xl border border-theme-border/14 bg-theme-surface/70 px-4 py-6 text-center text-theme-text/48">
               No line changes to review.
