@@ -173,6 +173,7 @@ class Version(Base):
     summary: Mapped[str] = mapped_column(String(500), nullable=False)
     diff_patch: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     context_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     # Relationship back to file

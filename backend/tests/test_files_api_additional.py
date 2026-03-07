@@ -365,6 +365,12 @@ async def test_update_content_and_diff_event_lifecycle(
 
     versions = await files_api.get_file_versions("file-diff", db=db_session, limit=20, offset=0)
     assert versions.data["total"] >= 1
+    assert versions.data["versions"][0]["result_snapshot"] == "line1\nline2\nline3"
+
+    version_rows = (
+        await db_session.execute(select(Version).where(Version.file_id == "file-diff").order_by(Version.timestamp.desc()))
+    ).scalars().all()
+    assert version_rows[0].result_snapshot == "line1\nline2\nline3"
 
 
 @pytest.mark.asyncio

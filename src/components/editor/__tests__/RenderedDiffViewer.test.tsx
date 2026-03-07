@@ -36,7 +36,8 @@ describe('RenderedDiffViewer', () => {
     expect(screen.queryByText('Rendered Modified')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Accept line 2')).toBeInTheDocument();
     expect(screen.getByLabelText('Reject line 3')).toBeInTheDocument();
-    expect(container.querySelectorAll('[data-testid="diff-block-card"]').length).toBe(2);
+    expect(container.querySelectorAll('[data-testid="diff-block-card"]').length).toBe(0);
+    expect(container.querySelectorAll('[data-testid="diff-review-unit"]').length).toBe(2);
     expect(container.querySelector('[data-diff-op="insert"]')).not.toBeNull();
     expect(container.querySelector('.katex')).not.toBeNull();
 
@@ -55,7 +56,8 @@ describe('RenderedDiffViewer', () => {
 
     expect(screen.queryByText('Rendered Original')).not.toBeInTheDocument();
     expect(screen.queryByText('Rendered Modified')).not.toBeInTheDocument();
-    expect(container.querySelectorAll('[data-testid="diff-block-card"]').length).toBe(2);
+    expect(container.querySelectorAll('[data-testid="diff-block-card"]').length).toBe(0);
+    expect(container.querySelectorAll('[data-testid="diff-review-unit"]').length).toBe(2);
     expect(container.querySelector('[data-diff-op="delete"]')).not.toBeNull();
     expect(container.querySelector('[data-diff-op="insert"]')).not.toBeNull();
   });
@@ -79,7 +81,8 @@ describe('RenderedDiffViewer', () => {
     );
 
     expect(container.innerHTML).not.toContain('data-type="inlineMath"');
-    expect(container.querySelectorAll('[data-testid="diff-block-card"]').length).toBe(1);
+    expect(container.querySelectorAll('[data-testid="diff-block-card"]').length).toBe(0);
+    expect(container.querySelectorAll('[data-testid="diff-review-unit"]').length).toBe(1);
     expect(container.querySelector('.katex')).not.toBeNull();
     expect(container.querySelector('[data-diff-op="delete"]')).not.toBeNull();
     expect(container.querySelector('[data-diff-op="insert"]')).not.toBeNull();
@@ -228,6 +231,21 @@ describe('RenderedDiffViewer', () => {
     expect(container.querySelectorAll('table').length).toBeGreaterThan(0);
   });
 
+  it('uses word-level text diff for prose so replacements do not collapse into merged fragments', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'summary: baseline metadata\n\nOld callout body.'}
+        newContent={'summary: refined metadata\n\nUpdated callout body.'}
+        mode="split"
+      />
+    );
+
+    expect(container.textContent).not.toContain('basrelfined');
+    expect(container.textContent).not.toContain('OlUpdated');
+    expect(container.querySelector('[data-diff-op="delete"]')).not.toBeNull();
+    expect(container.querySelector('[data-diff-op="insert"]')).not.toBeNull();
+  });
+
   it('renders footnote definitions as dedicated diff sections', () => {
     const { container } = render(
       <RenderedDiffViewer
@@ -239,9 +257,25 @@ describe('RenderedDiffViewer', () => {
 
     expect(container.textContent).toContain('Footnote 1');
     expect(container.textContent).toContain('new note');
+    expect(container.querySelectorAll('[data-diff-op="delete"]').length).toBeGreaterThanOrEqual(1);
+    expect(container.querySelectorAll('[data-diff-op="insert"]').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('treats html blocks as atomic structural content', () => {
+  it('renders footnote references as references instead of raw markdown syntax', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'Paragraph with ref[^1].'}
+        newContent={'Paragraph with better ref[^1] and another[^2].'}
+        mode="split"
+      />
+    );
+
+    expect(container.textContent).not.toContain('[^1]');
+    expect(container.textContent).not.toContain('[^2]');
+    expect(container.querySelectorAll('sup').length).toBeGreaterThan(0);
+  });
+
+  it('treats html blocks as rendered atomic structural content', () => {
     const { container } = render(
       <RenderedDiffViewer
         oldContent={'<div class="note">old</div>'}
@@ -250,8 +284,53 @@ describe('RenderedDiffViewer', () => {
       />
     );
 
-    expect(container.querySelector('pre')).not.toBeNull();
+    expect(container.querySelector('pre')).toBeNull();
     expect(container.textContent).toContain('new');
+    expect(container.querySelector('.note')).not.toBeNull();
     expect(container.querySelector('[data-diff-op="delete"]')).not.toBeNull();
+  });
+
+  it('renders inline html as actual inline content instead of raw tag tokens', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'Inline <span data-kind="old">html</span> update.'}
+        newContent={'Inline <span data-kind="new">html</span> update.'}
+        mode="split"
+      />
+    );
+
+    expect(container.textContent).not.toContain('<span data-kind');
+    expect(container.querySelector('[data-kind="new"]')).not.toBeNull();
+    expect(container.querySelector('[data-diff-op="delete"]')).not.toBeNull();
+    expect(container.querySelector('[data-diff-op="insert"]')).not.toBeNull();
+  });
+
+  it('renders relative-path markdown images as placeholders instead of broken image tags', () => {
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={'![chart](old-chart.png)'}
+        newContent={'![chart v2](new-chart.png)'}
+        mode="split"
+      />
+    );
+
+    expect(container.querySelector('figure')).toBeNull();
+    expect(container.querySelectorAll('img').length).toBe(0);
+    expect(container.textContent).toContain('chart v2');
+  });
+
+  it('renders previewable markdown images as image diffs instead of placeholders', () => {
+    const oldSvg = 'https://placehold.co/64x40/fca5a5/7f1d1d.png?text=v1';
+    const newSvg = 'https://placehold.co/64x40/86efac/166534.png?text=v2';
+    const { container } = render(
+      <RenderedDiffViewer
+        oldContent={`![chart old](${oldSvg})`}
+        newContent={`![chart new](${newSvg})`}
+        mode="split"
+      />
+    );
+
+    expect(container.querySelectorAll('img').length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).toContain('chart new');
   });
 });

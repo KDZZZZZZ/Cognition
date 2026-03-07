@@ -53,6 +53,13 @@ async def migrate_sqlite():
         result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='versions'"))
         if result.fetchone():
             print("[OK] versions table exists")
+            result = conn.execute(text("PRAGMA table_info(versions)"))
+            version_columns = [row[1] for row in result]
+            if "result_snapshot" not in version_columns:
+                print("Adding result_snapshot column to versions table...")
+                conn.execute(text("ALTER TABLE versions ADD COLUMN result_snapshot TEXT"))
+                conn.commit()
+                print("[OK] Added result_snapshot column")
         else:
             print("Creating versions table...")
             conn.execute(text("""
@@ -64,6 +71,7 @@ async def migrate_sqlite():
                     summary VARCHAR(500) NOT NULL,
                     diff_patch TEXT,
                     context_snapshot TEXT,
+                    result_snapshot TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
                 )
@@ -112,6 +120,17 @@ async def migrate_postgres():
 
         if result.fetchone():
             print("[OK] versions table exists")
+            result = await conn.execute(text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'versions' AND column_name = 'result_snapshot'
+            """))
+            if result.fetchone():
+                print("[OK] result_snapshot column already exists in versions table")
+            else:
+                print("Adding result_snapshot column to versions table...")
+                await conn.execute(text("ALTER TABLE versions ADD COLUMN result_snapshot TEXT"))
+                print("[OK] Added result_snapshot column")
         else:
             print("Creating versions table...")
             await conn.execute(text("""
@@ -123,6 +142,7 @@ async def migrate_postgres():
                     summary VARCHAR(500) NOT NULL,
                     diff_patch TEXT,
                     context_snapshot TEXT,
+                    result_snapshot TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """))

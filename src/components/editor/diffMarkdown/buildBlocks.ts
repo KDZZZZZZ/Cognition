@@ -38,6 +38,17 @@ function contentFromRows(rows: DiffRenderRow[], side: 'old' | 'new') {
     .join('\n');
 }
 
+function rowsForNodeRange(rows: DiffRenderRow[], node: Content, side: 'old' | 'new') {
+  const startLine = node.position?.start.line;
+  const endLine = node.position?.end.line;
+  if (!startLine || !endLine) return [];
+
+  return rows.filter((row) => {
+    const lineNumber = side === 'old' ? row.oldLineNumber : row.newLineNumber;
+    return lineNumber !== null && lineNumber >= startLine && lineNumber <= endLine;
+  });
+}
+
 function pickPrimaryNode(root: Root | null): Content | null {
   if (!root || root.children.length === 0) return null;
   return (root.children.find((child) => child.type !== 'definition') || root.children[0]) as Content;
@@ -92,12 +103,12 @@ function isStructuralChange(oldNode: Content | null, newNode: Content | null) {
   return false;
 }
 
-function buildFallbackBlocks(rows: DiffRenderRow[], occupied: Set<number>) {
+function buildFallbackBlocks(rows: DiffRenderRow[], occupied: Set<string>) {
   const blocks: Array<{ start: number; end: number }> = [];
   let start = -1;
 
   rows.forEach((row, index) => {
-    const uncoveredChangedRow = row.status !== 'equal' && !occupied.has(index);
+    const uncoveredChangedRow = row.status !== 'equal' && !occupied.has(row.id);
     if (!uncoveredChangedRow) {
       if (start !== -1) {
         blocks.push({ start, end: index - 1 });
@@ -116,77 +127,96 @@ function buildFallbackBlocks(rows: DiffRenderRow[], occupied: Set<number>) {
   return blocks;
 }
 
+function createBlockFromRows(
+  id: string,
+  blockRows: DiffRenderRow[],
+  preferredNode: Content | null
+): DiffBlock | null {
+  if (blockRows.length === 0 || !blockRows.some((row) => row.status !== 'equal')) {
+    return null;
+  }
+
+  const oldText = contentFromRows(blockRows, 'old');
+  const newText = contentFromRows(blockRows, 'new');
+  const oldRoot = parseRoot(oldText);
+  const newRoot = parseRoot(newText);
+  const oldNode = pickPrimaryNode(oldRoot);
+  const newNode = pickPrimaryNode(newRoot);
+  const effectiveNode = newNode || oldNode || preferredNode;
+  const kind = classifyNode(effectiveNode);
+
+  return {
+    id,
+    kind,
+    rows: blockRows,
+    changedRows: blockRows.filter((row) => row.status !== 'equal'),
+    reviewText: blockRows.map(reviewTextForRow).join('\n'),
+    oldText,
+    newText,
+    compact: blockRows.length <= 2,
+    structural: isStructuralChange(oldNode, newNode),
+    reviewNode: effectiveNode,
+    oldRoot,
+    newRoot,
+    callout: detectCallout(effectiveNode),
+    reviewUnits: [],
+  };
+}
+
+function markOccupiedRows(occupied: Set<string>, rows: DiffRenderRow[]) {
+  for (const row of rows) {
+    if (row.status === 'equal') continue;
+    occupied.add(row.id);
+  }
+}
+
 export function buildDiffBlocks(rows: DiffRenderRow[]): DiffBlock[] {
-  const reviewLines = rows.map(reviewTextForRow);
-  const reviewRoot = parseRoot(reviewLines.join('\n'));
-  const occupied = new Set<number>();
+  const oldRoot = parseRoot(contentFromRows(rows, 'old'));
+  const newRoot = parseRoot(contentFromRows(rows, 'new'));
+  const occupied = new Set<string>();
   const blocks: DiffBlock[] = [];
 
-  for (const node of reviewRoot?.children || []) {
+  for (const node of newRoot?.children || []) {
     if (!hasPosition(node as Content)) continue;
-    const startIndex = ((node as Content).position?.start.line || 1) - 1;
-    const endIndex = ((node as Content).position?.end.line || 1) - 1;
-    const blockRows = rows.slice(startIndex, endIndex + 1);
-    if (!blockRows.some((row) => row.status !== 'equal')) {
+    const blockRows = rowsForNodeRange(rows, node as Content, 'new');
+    const block = createBlockFromRows(
+      `new-${(node as Content).position?.start.line || 1}-${(node as Content).position?.end.line || 1}`,
+      blockRows,
+      node as Content
+    );
+    if (!block) continue;
+    markOccupiedRows(occupied, blockRows);
+    blocks.push(block);
+  }
+
+  for (const node of oldRoot?.children || []) {
+    if (!hasPosition(node as Content)) continue;
+    const blockRows = rowsForNodeRange(rows, node as Content, 'old');
+    if (!blockRows.some((row) => row.status !== 'equal' && !occupied.has(row.id))) {
       continue;
     }
-
-    for (let index = startIndex; index <= endIndex; index += 1) {
-      occupied.add(index);
-    }
-
-    const oldText = contentFromRows(blockRows, 'old');
-    const newText = contentFromRows(blockRows, 'new');
-    const oldRoot = parseRoot(oldText);
-    const newRoot = parseRoot(newText);
-    const oldNode = pickPrimaryNode(oldRoot);
-    const newNode = pickPrimaryNode(newRoot);
-    const effectiveNode = newNode || oldNode;
-    const kind = classifyNode(effectiveNode);
-
-    blocks.push({
-      id: `block-${startIndex + 1}-${endIndex + 1}`,
-      kind,
-      rows: blockRows,
-      changedRows: blockRows.filter((row) => row.status !== 'equal'),
-      reviewText: blockRows.map(reviewTextForRow).join('\n'),
-      oldText,
-      newText,
-      compact: blockRows.length <= 2,
-      structural: isStructuralChange(oldNode, newNode),
-      reviewNode: effectiveNode,
-      oldRoot,
-      newRoot,
-      callout: detectCallout(effectiveNode),
-      reviewUnits: [],
-    });
+    const block = createBlockFromRows(
+      `old-${(node as Content).position?.start.line || 1}-${(node as Content).position?.end.line || 1}`,
+      blockRows,
+      node as Content
+    );
+    if (!block) continue;
+    markOccupiedRows(occupied, blockRows);
+    blocks.push(block);
   }
 
   for (const { start, end } of buildFallbackBlocks(rows, occupied)) {
     const blockRows = rows.slice(start, end + 1);
     const reviewText = blockRows.map(reviewTextForRow).join('\n');
-    const oldText = contentFromRows(blockRows, 'old');
-    const newText = contentFromRows(blockRows, 'new');
-    const oldRoot = parseRoot(oldText);
-    const newRoot = parseRoot(newText);
-    const oldNode = pickPrimaryNode(oldRoot);
-    const newNode = pickPrimaryNode(newRoot);
-
+    const block = createBlockFromRows(
+      `fallback-${start + 1}-${end + 1}`,
+      blockRows,
+      null
+    );
+    if (!block) continue;
     blocks.push({
-      id: `fallback-${start + 1}-${end + 1}`,
-      kind: isBlankBlockText(reviewText) ? 'blank' : classifyNode(newNode || oldNode),
-      rows: blockRows,
-      changedRows: blockRows.filter((row) => row.status !== 'equal'),
-      reviewText,
-      oldText,
-      newText,
-      compact: blockRows.length <= 2,
-      structural: isStructuralChange(oldNode, newNode),
-      reviewNode: newNode || oldNode,
-      oldRoot,
-      newRoot,
-      callout: detectCallout(newNode || oldNode),
-      reviewUnits: [],
+      ...block,
+      kind: isBlankBlockText(reviewText) ? 'blank' : block.kind,
     });
   }
 

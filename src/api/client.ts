@@ -167,6 +167,7 @@ export interface FileVersion {
   summary: string;
   diff_patch?: string;
   context_snapshot?: string;
+  result_snapshot?: string;
   timestamp: string;
 }
 

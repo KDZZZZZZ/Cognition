@@ -233,6 +233,7 @@ async def _finalize_diff_event_record(
         summary=summary or "Finalize diff event",
         diff_patch=_build_unified_diff(event.old_content, final_content),
         context_snapshot=event.old_content,
+        result_snapshot=final_content,
     )
     db.add(version)
 
@@ -667,7 +668,8 @@ async def update_file_content(
         change_type=update.change_type,
         summary=update.summary,
         diff_patch=diff_patch,
-        context_snapshot=context_snapshot
+        context_snapshot=context_snapshot,
+        result_snapshot=update.content,
     )
     db.add(version)
 
@@ -967,6 +969,7 @@ async def get_file_versions(
             "summary": v.summary,
             "diff_patch": v.diff_patch,
             "context_snapshot": v.context_snapshot,
+            "result_snapshot": v.result_snapshot,
             "timestamp": v.timestamp.isoformat()
         }
         for v in versions
@@ -1243,6 +1246,7 @@ async def finalize_diff_event(
         summary=request.summary or "Finalize diff event",
         diff_patch=_build_unified_diff(event.old_content, final_content),
         context_snapshot=event.old_content,
+        result_snapshot=final_content,
     )
     db.add(version)
 

@@ -210,6 +210,7 @@ class VersionNode(BaseModel):
     summary: str
     diff_patch: Optional[str] = None
     context_snapshot: Optional[str] = None
+    result_snapshot: Optional[str] = None
 
 
 class ChatResponse(BaseModel):

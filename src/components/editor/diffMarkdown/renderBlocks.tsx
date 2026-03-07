@@ -1,6 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
-import { diffArrays, diffChars } from 'diff';
-import { Check, X } from 'lucide-react';
+import { diffArrays, diffChars, diffWordsWithSpace } from 'diff';
+import { Check, Image as ImageIcon, X } from 'lucide-react';
 import { toString } from 'mdast-util-to-string';
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
@@ -18,7 +18,15 @@ import type {
   TableCell,
   TableRow,
 } from 'mdast';
-import { renderKatexToHtml, markdownCodeBlockClassName, diffInlineDeleteClassName, diffInlineInsertClassName, diffStructuralClassName } from '../../ui/markdownShared';
+import {
+  renderKatexToHtml,
+  markdownCodeBlockClassName,
+  diffInlineDeleteClassName,
+  diffInlineInsertClassName,
+  diffStructuralClassName,
+  diffBlockDeleteClassName,
+  diffBlockInsertClassName,
+} from '../../ui/markdownShared';
 import { MarkdownContent } from '../../ui/MarkdownContent';
 import type { DiffRenderRow } from '../diffRows';
 import type { DiffBlock, DiffCalloutMeta, ReviewUnit } from './types';
@@ -71,8 +79,51 @@ function contentFromRows(rows: DiffRenderRow[], side: 'old' | 'new') {
     .join('\n');
 }
 
+function sliceRowsByPosition(rows: DiffRenderRow[], node: Content | ListItem | TableRow) {
+  const startLine = node.position?.start.line;
+  const endLine = node.position?.end.line;
+  if (!startLine || !endLine) return [];
+  return rows.slice(startLine - 1, endLine);
+}
+
 function escapeHtml(value: string) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeHtmlAttribute(value: string) {
+  return escapeHtml(value).replace(/"/g, '&quot;');
+}
+
+function stripHtmlTags(value: string) {
+  return value.replace(/<[^>]+>/g, '');
+}
+
+function isPreviewableImageUrl(url: string | undefined) {
+  if (!url) return false;
+  return /^(https?:\/\/|data:|blob:|\/)/i.test(url);
+}
+
+function compactResourceLabel(url: string | undefined) {
+  if (!url) return 'image';
+  const cleaned = url.split('?')[0]?.split('#')[0] || url;
+  const parts = cleaned.split('/');
+  return parts[parts.length - 1] || cleaned;
+}
+
+function htmlOpeningTagName(value: string) {
+  const match = value.match(/^<([A-Za-z][\w:-]*)(?:\s[^>]*)?>$/);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function htmlClosingTagName(value: string) {
+  const match = value.match(/^<\/([A-Za-z][\w:-]*)\s*>$/);
+  return match ? match[1].toLowerCase() : null;
+}
+
+function isSelfClosingHtml(value: string) {
+  if (/\/\s*>$/.test(value)) return true;
+  const tagName = htmlOpeningTagName(value);
+  return Boolean(tagName && ['br', 'hr', 'img', 'input', 'meta', 'link'].includes(tagName));
 }
 
 function renderMath(value: string, displayMode: boolean, key: string, className = '') {
@@ -82,6 +133,23 @@ function renderMath(value: string, displayMode: boolean, key: string, className 
   }
   const Tag = displayMode ? 'div' : 'span';
   return <Tag key={key} className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function classNames(...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(' ');
+}
+
+function atomicInlineClass(op: 'equal' | 'insert' | 'delete' | 'structural', extra = '') {
+  if (op === 'equal') return extra;
+  return classNames(
+    'mx-0.5 inline-flex items-center rounded-sm px-1.5 py-0.5 align-baseline',
+    op === 'insert'
+      ? 'bg-emerald-500/25 text-theme-text'
+      : op === 'delete'
+        ? 'bg-rose-500/20 text-theme-text/70'
+        : 'bg-amber-500/10 text-theme-text',
+    extra
+  );
 }
 
 function renderInlineAtom(token: InlineToken, key: string, op: 'equal' | 'insert' | 'delete' | 'structural' = 'equal') {
@@ -103,8 +171,16 @@ function renderInlineAtom(token: InlineToken, key: string, op: 'equal' | 'insert
   }
 
   if (token.kind === 'inlineMath') {
+    const mathClass =
+      op === 'insert'
+        ? `mx-0.5 inline-flex items-center rounded-sm bg-emerald-500/20 px-1.5 py-0.5 text-theme-text`
+      : op === 'delete'
+          ? `mx-0.5 inline-flex items-center rounded-sm bg-rose-500/20 px-1.5 py-0.5 text-theme-text/70`
+          : op === 'structural'
+            ? `mx-0.5 inline-flex items-center rounded-sm border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5`
+            : 'inline-flex items-center';
     return (
-      <span key={key} data-diff-op={op === 'equal' ? undefined : op} className={stateClass}>
+      <span key={key} data-diff-op={op === 'equal' ? undefined : op} className={mathClass}>
         {renderMath(token.value || '', false, `${key}-math`)}
       </span>
     );
@@ -119,19 +195,40 @@ function renderInlineAtom(token: InlineToken, key: string, op: 'equal' | 'insert
   }
 
   if (token.kind === 'image') {
+    const previewable = isPreviewableImageUrl(token.url);
     return (
-      <figure key={key} data-diff-op={op === 'equal' ? undefined : op} className={`my-2 inline-flex flex-col gap-1 rounded-md border border-theme-border/20 p-2 align-middle ${stateClass}`}>
-        <img src={token.url} alt={token.alt || ''} className="max-h-40 max-w-full rounded object-contain" />
-        {token.alt ? <figcaption className="text-[11px] text-theme-text/55">{token.alt}</figcaption> : null}
-      </figure>
+      <span
+        key={key}
+        data-diff-op={op === 'equal' ? undefined : op}
+        className={classNames(
+          previewable
+            ? (op === 'equal'
+                ? 'my-1 inline-flex max-w-full items-center gap-2 align-middle'
+                : atomicInlineClass(op, 'my-1 max-w-full gap-2 align-middle'))
+            : atomicInlineClass(op, 'max-w-full gap-1.5 align-middle'),
+          !previewable && op === 'equal' && 'mx-0.5 inline-flex items-center gap-1.5 align-middle text-theme-text/68'
+        )}
+      >
+        {previewable ? (
+          <img src={token.url} alt={token.alt || ''} className="max-h-40 max-w-full rounded object-contain" />
+        ) : (
+          <ImageIcon className="h-3.5 w-3.5 shrink-0 text-theme-text/40" />
+        )}
+        <span className={classNames('text-[11px]', previewable ? 'text-theme-text/60' : 'text-theme-text/70')}>
+          {token.alt || compactResourceLabel(token.url)}
+        </span>
+      </span>
     );
   }
 
   if (token.kind === 'html') {
     return (
-      <code key={key} data-diff-op={op === 'equal' ? undefined : op} className={`rounded-sm px-1 py-0.5 text-[0.92em] ${stateClass || 'bg-theme-text/8 text-theme-text'}`}>
-        {token.value}
-      </code>
+      <span
+        key={key}
+        data-diff-op={op === 'equal' ? undefined : op}
+        className={op === 'equal' ? 'inline align-baseline' : atomicInlineClass(op)}
+        dangerouslySetInnerHTML={{ __html: token.value || '' }}
+      />
     );
   }
 
@@ -143,47 +240,143 @@ function renderInlineAtom(token: InlineToken, key: string, op: 'equal' | 'insert
 }
 
 function tokenizeInline(nodes: PhrasingContent[] = []): InlineToken[] {
-  return nodes.flatMap((node): InlineToken[] => {
+  const splitText = (value: string): InlineToken[] => {
+    if (!value) return [];
+    const tokens: InlineToken[] = [];
+    const pattern = /\[\^([^[\]]+)\]/g;
+    let cursor = 0;
+    let match = pattern.exec(value);
+    while (match) {
+      if (match.index > cursor) {
+        tokens.push({ kind: 'text', value: value.slice(cursor, match.index) });
+      }
+      tokens.push({ kind: 'footnoteReference', identifier: match[1] });
+      cursor = match.index + match[0].length;
+      match = pattern.exec(value);
+    }
+    if (cursor < value.length) {
+      tokens.push({ kind: 'text', value: value.slice(cursor) });
+    }
+    return tokens;
+  };
+
+  const serializeInlineNode = (node: PhrasingContent): string => {
     switch (node.type) {
       case 'text':
-        return node.value ? [{ kind: 'text', value: node.value }] : [];
+        return escapeHtml(node.value);
       case 'strong':
-        return [{ kind: 'strong', children: tokenizeInline(node.children as PhrasingContent[]) }];
+        return `<strong>${(node.children as PhrasingContent[]).map(serializeInlineNode).join('')}</strong>`;
       case 'emphasis':
-        return [{ kind: 'emphasis', children: tokenizeInline(node.children as PhrasingContent[]) }];
+        return `<em>${(node.children as PhrasingContent[]).map(serializeInlineNode).join('')}</em>`;
       case 'delete':
-        return [{ kind: 'delete', children: tokenizeInline(node.children as PhrasingContent[]) }];
-      case 'link':
-        return [
-          {
-            kind: 'link',
-            url: node.url,
-            title: node.title || undefined,
-            children: tokenizeInline(node.children as PhrasingContent[]),
-          },
-        ];
-      case 'image':
-        return [{ kind: 'image', url: node.url, title: node.title || undefined, alt: node.alt || undefined }];
+        return `<del>${(node.children as PhrasingContent[]).map(serializeInlineNode).join('')}</del>`;
+      case 'link': {
+        const title = node.title ? ` title="${escapeHtmlAttribute(node.title)}"` : '';
+        return `<a href="${escapeHtmlAttribute(node.url)}"${title}>${(node.children as PhrasingContent[]).map(serializeInlineNode).join('')}</a>`;
+      }
+      case 'image': {
+        const title = node.title ? ` title="${escapeHtmlAttribute(node.title)}"` : '';
+        return `<img src="${escapeHtmlAttribute(node.url)}" alt="${escapeHtmlAttribute(node.alt || '')}"${title} />`;
+      }
       case 'inlineCode':
-        return [{ kind: 'inlineCode', value: node.value }];
+        return `<code>${escapeHtml(node.value)}</code>`;
       case 'inlineMath':
-        return [{ kind: 'inlineMath', value: node.value }];
-      case 'footnoteReference':
-        return [{ kind: 'footnoteReference', identifier: node.identifier }];
+        return renderKatexToHtml(node.value, false) || escapeHtml(node.value);
       case 'html':
-        return [{ kind: 'html', value: node.value }];
+        return node.value;
       case 'break':
-        return [{ kind: 'break' }];
+        return '<br />';
       default:
-        return [{ kind: 'text', value: toString(node as any) }];
+        return escapeHtml(toString(node as any));
     }
-  });
+  };
+
+  const tokens: InlineToken[] = [];
+  for (let index = 0; index < nodes.length; index += 1) {
+    const node = nodes[index];
+    switch (node.type) {
+      case 'text':
+        tokens.push(...splitText(node.value));
+        break;
+      case 'html': {
+        const openTag = htmlOpeningTagName(node.value);
+        const closeTag = htmlClosingTagName(node.value);
+        if (openTag && !isSelfClosingHtml(node.value)) {
+          let depth = 1;
+          let cursor = index + 1;
+          while (cursor < nodes.length) {
+            const candidate = nodes[cursor];
+            if (candidate.type === 'html') {
+              if (htmlOpeningTagName(candidate.value) === openTag && !isSelfClosingHtml(candidate.value)) {
+                depth += 1;
+              } else if (htmlClosingTagName(candidate.value) === openTag) {
+                depth -= 1;
+                if (depth === 0) break;
+              }
+            }
+            cursor += 1;
+          }
+          const closingNode = cursor < nodes.length && nodes[cursor].type === 'html'
+            ? (nodes[cursor] as Extract<PhrasingContent, { type: 'html' }>)
+            : null;
+          if (closingNode && htmlClosingTagName(closingNode.value) === openTag) {
+            const innerHtml = nodes.slice(index + 1, cursor).map((child) => serializeInlineNode(child)).join('');
+            tokens.push({ kind: 'html', value: `${node.value}${innerHtml}${closingNode.value}` });
+            index = cursor;
+            break;
+          }
+        }
+        if (!closeTag) {
+          tokens.push({ kind: 'html', value: node.value });
+        }
+        break;
+      }
+      case 'strong':
+        tokens.push({ kind: 'strong', children: tokenizeInline(node.children as PhrasingContent[]) });
+        break;
+      case 'emphasis':
+        tokens.push({ kind: 'emphasis', children: tokenizeInline(node.children as PhrasingContent[]) });
+        break;
+      case 'delete':
+        tokens.push({ kind: 'delete', children: tokenizeInline(node.children as PhrasingContent[]) });
+        break;
+      case 'link':
+        tokens.push({
+          kind: 'link',
+          url: node.url,
+          title: node.title || undefined,
+          children: tokenizeInline(node.children as PhrasingContent[]),
+        });
+        break;
+      case 'image':
+        tokens.push({ kind: 'image', url: node.url, title: node.title || undefined, alt: node.alt || undefined });
+        break;
+      case 'inlineCode':
+        tokens.push({ kind: 'inlineCode', value: node.value });
+        break;
+      case 'inlineMath':
+        tokens.push({ kind: 'inlineMath', value: node.value });
+        break;
+      case 'footnoteReference':
+        tokens.push({ kind: 'footnoteReference', identifier: node.identifier });
+        break;
+      case 'break':
+        tokens.push({ kind: 'break' });
+        break;
+      default:
+        tokens.push({ kind: 'text', value: toString(node as any) });
+        break;
+    }
+  }
+
+  return tokens;
 }
 
 function tokenPlainText(token: InlineToken): string {
   if (token.kind === 'text') return token.value || '';
   if (token.kind === 'image') return token.alt || '';
-  if (token.kind === 'inlineCode' || token.kind === 'inlineMath' || token.kind === 'html') return token.value || '';
+  if (token.kind === 'inlineCode' || token.kind === 'inlineMath') return token.value || '';
+  if (token.kind === 'html') return stripHtmlTags(token.value || '');
   if (token.kind === 'footnoteReference') return token.identifier || '';
   if (token.kind === 'break') return '\n';
   return (token.children || []).map(tokenPlainText).join('');
@@ -203,24 +396,83 @@ function tokenSignature(token: InlineToken): string {
 }
 
 function renderTextDiff(oldValue: string, newValue: string, keyPrefix: string) {
-  return diffChars(oldValue, newValue).map((part, index) => {
-    if (!part.value) return null;
+  const useWordDiff = /\s/.test(`${oldValue}${newValue}`);
+  const parts = useWordDiff
+    ? diffWordsWithSpace(oldValue, newValue)
+    : diffChars(oldValue, newValue);
+  const hasSharedNonWhitespace = parts.some(
+    (part) => !part.added && !part.removed && Boolean(part.value.trim())
+  );
+  const canRenderWholePhraseReplacement =
+    useWordDiff &&
+    oldValue.trim() &&
+    newValue.trim() &&
+    !hasSharedNonWhitespace &&
+    parts.some((part) => part.added) &&
+    parts.some((part) => part.removed);
+
+  if (canRenderWholePhraseReplacement) {
+    return [
+      <span key={`${keyPrefix}-whole-pair`} className="mx-[1px] inline-flex items-baseline gap-px">
+        <del data-diff-op="delete" className={diffInlineDeleteClassName}>
+          {oldValue}
+        </del>
+        <span data-diff-op="insert" className={diffInlineInsertClassName}>
+          {newValue}
+        </span>
+      </span>,
+    ];
+  }
+
+  const nodes: ReactNode[] = [];
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!part.value) continue;
+    const next = parts[index + 1];
+    const canPairWithNext =
+      useWordDiff &&
+      part.removed &&
+      next?.added &&
+      Boolean(part.value.trim()) &&
+      Boolean(next.value.trim());
+
+    if (canPairWithNext) {
+      nodes.push(
+        <span key={`${keyPrefix}-pair-${index}`} className="mx-[1px] inline-flex items-baseline gap-px">
+          <del data-diff-op="delete" className={diffInlineDeleteClassName}>
+            {part.value}
+          </del>
+          <span data-diff-op="insert" className={diffInlineInsertClassName}>
+            {next.value}
+          </span>
+        </span>
+      );
+      index += 1;
+      continue;
+    }
+
     if (part.added) {
-      return (
+      nodes.push(
         <span key={`${keyPrefix}-a-${index}`} data-diff-op="insert" className={diffInlineInsertClassName}>
           {part.value}
         </span>
       );
+      continue;
     }
     if (part.removed) {
-      return (
+      nodes.push(
         <del key={`${keyPrefix}-r-${index}`} data-diff-op="delete" className={diffInlineDeleteClassName}>
           {part.value}
         </del>
       );
+      continue;
     }
-    return <Fragment key={`${keyPrefix}-e-${index}`}>{part.value}</Fragment>;
-  });
+
+    nodes.push(<Fragment key={`${keyPrefix}-e-${index}`}>{part.value}</Fragment>);
+  }
+
+  return nodes;
 }
 
 function renderInlineToken(token: InlineToken, key: string, op: 'equal' | 'insert' | 'delete' | 'structural' = 'equal'): ReactNode {
@@ -241,17 +493,15 @@ function renderInlineToken(token: InlineToken, key: string, op: 'equal' | 'inser
   }
 
   if (token.kind === 'link') {
-    const linkClass =
-      op === 'insert'
-        ? diffInlineInsertClassName
-        : op === 'delete'
-          ? diffInlineDeleteClassName
-          : op === 'structural'
-            ? diffStructuralClassName
-            : '';
+    const linkClass = classNames(
+      'underline underline-offset-2',
+      op === 'equal'
+        ? ''
+        : atomicInlineClass(op, op === 'delete' ? 'line-through decoration-rose-700/80' : '')
+    );
     return (
-      <a key={key} data-diff-op={op === 'equal' ? undefined : op} href={token.url} title={token.title || undefined} className={`underline underline-offset-2 ${linkClass}`}>
-        {(token.children || []).map((child, index) => renderInlineToken(child, `${key}-${index}`, op))}
+      <a key={key} data-diff-op={op === 'equal' ? undefined : op} href={token.url} title={token.title || undefined} className={linkClass}>
+        {(token.children || []).map((child, index) => renderInlineToken(child, `${key}-${index}`, op === 'equal' ? 'equal' : 'equal'))}
       </a>
     );
   }
@@ -260,10 +510,22 @@ function renderInlineToken(token: InlineToken, key: string, op: 'equal' | 'inser
 }
 
 function renderInlineDiff(oldTokens: InlineToken[], newTokens: InlineToken[], keyPrefix: string): ReactNode[] {
+  const requiresAtomicReplacement = (oldToken: InlineToken, newToken: InlineToken) => {
+    if (oldToken.kind !== newToken.kind) return false;
+    return ['html', 'image', 'inlineCode', 'inlineMath'].includes(oldToken.kind);
+  };
   const parts = diffArrays<InlineToken>(oldTokens, newTokens, {
     comparator: (left, right) => tokenSignature(left) === tokenSignature(right),
   });
   const nodes: ReactNode[] = [];
+  const pushAtomicPair = (key: string, oldNode: ReactNode, newNode: ReactNode) => {
+    nodes.push(
+      <span key={key} className="mx-0.5 inline-flex flex-wrap items-center gap-1 align-baseline">
+        {oldNode}
+        {newNode}
+      </span>
+    );
+  };
 
   for (let index = 0; index < parts.length; index += 1) {
     const part = parts[index];
@@ -286,8 +548,11 @@ function renderInlineDiff(oldTokens: InlineToken[], newTokens: InlineToken[], ke
         }
         if (sameKind && oldToken.children && newToken.children) {
           if (oldToken.kind === 'link' && oldToken.url !== newToken.url) {
-            nodes.push(renderInlineToken(oldToken, `${keyPrefix}-old-${index}-${offset}`, 'delete'));
-            nodes.push(renderInlineToken(newToken, `${keyPrefix}-new-${index}-${offset}`, 'insert'));
+            pushAtomicPair(
+              `${keyPrefix}-linkpair-${index}-${offset}`,
+              renderInlineToken(oldToken, `${keyPrefix}-old-${index}-${offset}`, 'delete'),
+              renderInlineToken(newToken, `${keyPrefix}-new-${index}-${offset}`, 'insert')
+            );
             continue;
           }
 
@@ -315,6 +580,15 @@ function renderInlineDiff(oldTokens: InlineToken[], newTokens: InlineToken[], ke
             }
             continue;
           }
+        }
+
+        if (requiresAtomicReplacement(oldToken, newToken)) {
+          pushAtomicPair(
+            `${keyPrefix}-atomic-${index}-${offset}`,
+            renderInlineToken(oldToken, `${keyPrefix}-del-${index}-${offset}`, 'delete'),
+            renderInlineToken(newToken, `${keyPrefix}-ins-${index}-${offset}`, 'insert')
+          );
+          continue;
         }
 
         if (tokenPlainText(oldToken) === tokenPlainText(newToken)) {
@@ -378,9 +652,9 @@ function renderHeading(oldNode: any, newNode: any, key: string) {
 }
 
 function calloutTone(kind: string) {
-  if (kind === 'warning' || kind === 'caution') return 'border-amber-500/35 bg-amber-500/8 text-amber-900';
-  if (kind === 'danger' || kind === 'error') return 'border-rose-500/35 bg-rose-500/8 text-rose-900';
-  if (kind === 'tip' || kind === 'success') return 'border-emerald-500/35 bg-emerald-500/8 text-emerald-900';
+  if (kind === 'warning' || kind === 'caution') return 'border-amber-500/30 bg-amber-500/10 text-amber-900';
+  if (kind === 'danger' || kind === 'error') return 'border-rose-500/30 bg-rose-500/10 text-rose-900';
+  if (kind === 'tip' || kind === 'success') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-900';
   return 'border-sky-500/30 bg-sky-500/8 text-theme-text';
 }
 
@@ -537,7 +811,7 @@ function renderBlockquote(oldNode: any, newNode: any, key: string, callout: Diff
   }
 
   return (
-    <blockquote key={key} className="my-0 border-l-2 border-theme-border/30 pl-3 text-theme-text/78">
+    <blockquote key={key} className="my-0 border-l-2 border-theme-border/30 pl-3 text-theme-text/80">
       <div className="flex flex-col gap-1">{body}</div>
     </blockquote>
   );
@@ -594,14 +868,14 @@ function renderTable(oldNode: Table | null, newNode: Table | null, key: string) 
       }
       for (const [rowIndex, row] of removed.slice(shared).entries()) {
         bodyRows.push(
-          <tr key={`${key}-rm-${index}-${rowIndex}`} className="bg-rose-500/12">
+          <tr key={`${key}-rm-${index}-${rowIndex}`} className="bg-rose-500/10">
             {row.children.map((cell, cellIndex) => renderTableCell(cell, null, `${key}-rm-cell-${index}-${rowIndex}-${cellIndex}`))}
           </tr>
         );
       }
       for (const [rowIndex, row] of added.slice(shared).entries()) {
         bodyRows.push(
-          <tr key={`${key}-ad-${index}-${rowIndex}`} className="bg-emerald-500/12">
+          <tr key={`${key}-ad-${index}-${rowIndex}`} className="bg-emerald-500/10">
             {row.children.map((cell, cellIndex) => renderTableCell(null, cell, `${key}-ad-cell-${index}-${rowIndex}-${cellIndex}`))}
           </tr>
         );
@@ -613,7 +887,7 @@ function renderTable(oldNode: Table | null, newNode: Table | null, key: string) 
     if (part.removed) {
       bodyRows.push(
         ...part.value.map((row, rowIndex) => (
-          <tr key={`${key}-del-${index}-${rowIndex}`} className="bg-rose-500/12">
+          <tr key={`${key}-del-${index}-${rowIndex}`} className="bg-rose-500/10">
             {row.children.map((cell, cellIndex) => renderTableCell(cell, null, `${key}-del-cell-${index}-${rowIndex}-${cellIndex}`))}
           </tr>
         ))
@@ -623,7 +897,7 @@ function renderTable(oldNode: Table | null, newNode: Table | null, key: string) 
 
     bodyRows.push(
       ...part.value.map((row, rowIndex) => (
-        <tr key={`${key}-ins-${index}-${rowIndex}`} className="bg-emerald-500/12">
+        <tr key={`${key}-ins-${index}-${rowIndex}`} className="bg-emerald-500/10">
           {row.children.map((cell, cellIndex) => renderTableCell(null, cell, `${key}-ins-cell-${index}-${rowIndex}-${cellIndex}`))}
         </tr>
       ))
@@ -669,30 +943,30 @@ function renderCodeBlock(oldNode: any, newNode: any, key: string, langLabel?: st
       for (let offset = 0; offset < shared; offset += 1) {
         rows.push(
           <div key={`${key}-pair-${index}-${offset}`} className="grid grid-cols-2 gap-px">
-            <div className="bg-rose-500/12 px-3 py-0.5 line-through decoration-rose-700/80">{removed[offset] || ' '}</div>
-            <div className="bg-emerald-500/12 px-3 py-0.5">{added[offset] || ' '}</div>
+            <div className="bg-rose-500/10 px-3 py-0.5 line-through decoration-rose-700/80">{removed[offset] || ' '}</div>
+            <div className="bg-emerald-500/10 px-3 py-0.5">{added[offset] || ' '}</div>
           </div>
         );
       }
       for (const [lineIndex, line] of removed.slice(shared).entries()) {
-        rows.push(<div key={`${key}-rm-${index}-${lineIndex}`} className="bg-rose-500/12 px-3 py-0.5 line-through decoration-rose-700/80">{line || ' '}</div>);
+        rows.push(<div key={`${key}-rm-${index}-${lineIndex}`} className="bg-rose-500/10 px-3 py-0.5 line-through decoration-rose-700/80">{line || ' '}</div>);
       }
       for (const [lineIndex, line] of added.slice(shared).entries()) {
-        rows.push(<div key={`${key}-ad-${index}-${lineIndex}`} className="bg-emerald-500/12 px-3 py-0.5">{line || ' '}</div>);
+        rows.push(<div key={`${key}-ad-${index}-${lineIndex}`} className="bg-emerald-500/10 px-3 py-0.5">{line || ' '}</div>);
       }
       index += 1;
       continue;
     }
     if (part.removed) {
-      rows.push(...part.value.map((line, lineIndex) => <div key={`${key}-del-${index}-${lineIndex}`} className="bg-rose-500/12 px-3 py-0.5 line-through decoration-rose-700/80">{line || ' '}</div>));
+      rows.push(...part.value.map((line, lineIndex) => <div key={`${key}-del-${index}-${lineIndex}`} className="bg-rose-500/10 px-3 py-0.5 line-through decoration-rose-700/80">{line || ' '}</div>));
       continue;
     }
-    rows.push(...part.value.map((line, lineIndex) => <div key={`${key}-ins-${index}-${lineIndex}`} className="bg-emerald-500/12 px-3 py-0.5">{line || ' '}</div>));
+    rows.push(...part.value.map((line, lineIndex) => <div key={`${key}-ins-${index}-${lineIndex}`} className="bg-emerald-500/10 px-3 py-0.5">{line || ' '}</div>));
   }
 
   return (
-    <div key={key} className={`${markdownCodeBlockClassName} bg-theme-bg/78`}>
-      {langLabel ? <div className="border-b border-theme-border/12 px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-theme-text/45">{langLabel}</div> : null}
+    <div key={key} className={`${markdownCodeBlockClassName} bg-theme-bg/80`}>
+      {langLabel ? <div className="border-b border-theme-border/10 px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-theme-text/50">{langLabel}</div> : null}
       <pre className="m-0 overflow-x-auto bg-transparent py-2 text-xs text-theme-text"><code>{rows}</code></pre>
     </div>
   );
@@ -716,13 +990,21 @@ function renderHtmlBlock(oldNode: any, newNode: any, key: string) {
   const newValue = newNode?.value || '';
   if (oldValue && newValue && oldValue !== newValue) {
     return (
-      <div key={key} className="flex flex-col gap-2">
-        <pre data-diff-op="delete" className={`${markdownCodeBlockClassName} ${diffInlineDeleteClassName} my-0 text-xs`}>{oldValue}</pre>
-        <pre data-diff-op="insert" className={`${markdownCodeBlockClassName} ${diffInlineInsertClassName} my-0 text-xs`}>{newValue}</pre>
+      <div key={key} className="flex flex-col gap-1.5">
+        <div
+          data-diff-op="delete"
+          className="my-0 inline-block w-fit max-w-full rounded-md bg-rose-500/20 px-2.5 py-1 text-theme-text/70 line-through decoration-rose-700/80"
+          dangerouslySetInnerHTML={{ __html: oldValue }}
+        />
+        <div
+          data-diff-op="insert"
+          className="my-0 inline-block w-fit max-w-full rounded-md bg-emerald-500/20 px-2.5 py-1 text-theme-text"
+          dangerouslySetInnerHTML={{ __html: newValue }}
+        />
       </div>
     );
   }
-  return <pre key={key} className={`${markdownCodeBlockClassName} my-0 text-xs`}>{newValue || oldValue}</pre>;
+  return <div key={key} className="my-0" dangerouslySetInnerHTML={{ __html: newValue || oldValue }} />;
 }
 
 function parseFrontmatter(node: any): Array<[string, string]> {
@@ -771,8 +1053,8 @@ function renderFrontmatter(oldNode: any, newNode: any, key: string) {
 
 function renderFootnote(oldNode: any, newNode: any, key: string) {
   return (
-    <section key={key} className="rounded-md border border-theme-border/18 bg-theme-surface/36 px-3 py-2">
-      <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-theme-text/45">
+    <section key={key} className="rounded-md border border-theme-border/20 bg-theme-surface/40 px-3 py-2">
+      <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-theme-text/50">
         Footnote {(newNode?.identifier || oldNode?.identifier || '').toString()}
       </div>
       <div className="flex flex-col gap-1">
@@ -788,9 +1070,9 @@ function renderBlockNode(oldNode: Content | null, newNode: Content | null, key: 
 
   if (oldNode && newNode && oldNode.type !== newNode.type) {
     return (
-      <div key={key} className={`flex flex-col gap-2 ${diffStructuralClassName}`}>
-        <div className="rounded-md bg-rose-500/10 p-2">{renderBlockNode(oldNode, null, `${key}-old`)}</div>
-        <div className="rounded-md bg-emerald-500/10 p-2">{renderBlockNode(null, newNode, `${key}-new`)}</div>
+      <div key={key} className="flex flex-col gap-1.5">
+        <div className={diffBlockDeleteClassName}>{renderBlockNode(oldNode, null, `${key}-old`)}</div>
+        <div className={diffBlockInsertClassName}>{renderBlockNode(null, newNode, `${key}-new`)}</div>
       </div>
     );
   }
@@ -849,6 +1131,12 @@ function unitIsSelected(unit: ReviewUnit, selectedLineId: string | null) {
   return Boolean(selectedLineId && unit.lineIds.includes(selectedLineId));
 }
 
+function reviewControlVisibilityClass(unit: ReviewUnit, selectedLineId: string | null) {
+  return unitIsSelected(unit, selectedLineId)
+    ? 'opacity-100'
+    : 'pointer-events-none opacity-0 group-hover/review:opacity-100 group-focus-within/review:opacity-100';
+}
+
 function DecisionButtons({
   unit,
   onApplyLineDecision,
@@ -870,7 +1158,7 @@ function DecisionButtons({
       <button
         type="button"
         onClick={() => void onApplyLineDecision(target, 'accepted')}
-        className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-800 transition-colors hover:bg-emerald-500/16"
+        className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-800 transition-colors hover:bg-emerald-500/20"
         aria-label={`Accept ${subject}`}
       >
         <Check size={11} />
@@ -878,7 +1166,7 @@ function DecisionButtons({
       <button
         type="button"
         onClick={() => void onApplyLineDecision(target, 'rejected')}
-        className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500/10 text-rose-800 transition-colors hover:bg-rose-500/16"
+        className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500/10 text-rose-800 transition-colors hover:bg-rose-500/20"
         aria-label={`Reject ${subject}`}
       >
         <X size={11} />
@@ -887,39 +1175,66 @@ function DecisionButtons({
   );
 }
 
-function UnitCardShell({
+function ReviewControlsOverlay({
+  unit,
+  selectedLineId,
+  onApplyLineDecision,
+  className = '',
+}: {
+  unit: ReviewUnit;
+  selectedLineId: string | null;
+  onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>;
+  className?: string;
+}) {
+  if (!onApplyLineDecision) return null;
+
+  return (
+    <div
+      className={`absolute z-20 ${className} ${reviewControlVisibilityClass(unit, selectedLineId)}`}
+    >
+      <div className="pointer-events-auto rounded-full border border-theme-border/20 bg-theme-bg/90 p-0.5 shadow-sm backdrop-blur-sm">
+        <DecisionButtons unit={unit} onApplyLineDecision={onApplyLineDecision} />
+      </div>
+    </div>
+  );
+}
+
+function ReviewAnchor({
   unit,
   selectedLineId,
   onSelectLine,
-  controls,
+  onApplyLineDecision,
+  controlsClassName = 'right-0 top-0',
+  className = '',
+  testId = true,
   children,
 }: {
   unit: ReviewUnit;
   selectedLineId: string | null;
   onSelectLine?: (lineId: string) => void;
-  controls?: ReactNode;
+  onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>;
+  controlsClassName?: string;
+  className?: string;
+  testId?: boolean;
   children: ReactNode;
 }) {
   return (
     <div
-      className={`rounded-xl border px-2.5 py-2 transition-colors ${
-        unitIsSelected(unit, selectedLineId)
-          ? 'border-theme-border/26 bg-theme-text/[0.045]'
-          : 'border-theme-border/10 bg-theme-surface/28'
-      }`}
-      data-testid="diff-block-card"
+      data-testid={testId ? 'diff-review-unit' : undefined}
       data-review-unit={unit.kind}
+      className={`group/review relative min-w-0 ${className}`}
       onMouseEnter={() => {
         const firstLineId = unit.lineIds[0];
         if (firstLineId) onSelectLine?.(firstLineId);
       }}
     >
-      <div className="min-w-0 rounded-lg border border-theme-border/10 bg-theme-bg/78 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-        {controls ? <div className="mb-2 flex items-center justify-between gap-3">{controls}</div> : null}
-        <div className="min-w-0 text-sm leading-6 [&_.katex-display]:my-0.5 [&_blockquote]:my-0 [&_code]:whitespace-pre-wrap [&_ol]:my-0 [&_p]:my-0 [&_pre]:my-0 [&_ul]:my-0">
-          {children}
-        </div>
-      </div>
+      {children}
+      <ReviewControlsOverlay
+        unit={unit}
+        selectedLineId={selectedLineId}
+        onApplyLineDecision={onApplyLineDecision}
+        className={controlsClassName}
+      />
     </div>
   );
 }
@@ -934,20 +1249,8 @@ function renderUnitMarkdown(unit: ReviewUnit) {
     .join('\n');
 }
 
-function renderUnitSummary(unit: ReviewUnit) {
-  const lineNumber = unitFirstLineNumber(unit);
-  if (unit.kind === 'block') {
-    return <span className="text-[11px] uppercase tracking-[0.14em] text-theme-text/45">{unit.label || 'Block review'}</span>;
-  }
-  return (
-    <span className="text-[11px] uppercase tracking-[0.14em] text-theme-text/45">
-      {unit.kind === 'item' ? unit.label || 'Item' : `Line ${lineNumber ?? ''}`.trim()}
-    </span>
-  );
-}
-
 function renderLineUnit(unit: ReviewUnit, block: DiffBlock) {
-  if (block.kind === 'heading' || block.kind === 'paragraph') {
+  if (block.kind === 'heading' || block.kind === 'paragraph' || block.kind === 'blockquote') {
     const oldRoot = parseMarkdownRoot(contentFromRows(unit.rows, 'old'));
     const newRoot = parseMarkdownRoot(contentFromRows(unit.rows, 'new'));
     const oldNode = primaryNode(oldRoot);
@@ -966,19 +1269,6 @@ function renderLineUnit(unit: ReviewUnit, block: DiffBlock) {
   );
 }
 
-function renderItemUnit(unit: ReviewUnit) {
-  const oldRoot = parseMarkdownRoot(contentFromRows(unit.rows, 'old'));
-  const newRoot = parseMarkdownRoot(contentFromRows(unit.rows, 'new'));
-  const oldList = primaryNode(oldRoot) as List | null;
-  const newList = primaryNode(newRoot) as List | null;
-  const oldItem = oldList?.type === 'list' ? (oldList.children[0] as ListItem | undefined) || null : null;
-  const newItem = newList?.type === 'list' ? (newList.children[0] as ListItem | undefined) || null : null;
-  const ordered = Boolean(newList?.ordered ?? oldList?.ordered);
-  const Tag = ordered ? 'ol' : 'ul';
-
-  return <Tag className={`${ordered ? 'list-decimal' : 'list-disc'} pl-5`}>{renderListItem(oldItem, newItem, unit.id)}</Tag>;
-}
-
 function renderLineUnitsBlock(
   block: DiffBlock,
   selectedLineId: string | null,
@@ -986,74 +1276,253 @@ function renderLineUnitsBlock(
   onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>
 ) {
   return block.reviewUnits.map((unit) => (
-    <UnitCardShell
+    <ReviewAnchor
       key={unit.id}
       unit={unit}
       selectedLineId={selectedLineId}
       onSelectLine={onSelectLine}
-      controls={
-        <>
-          {renderUnitSummary(unit)}
-          <DecisionButtons unit={unit} onApplyLineDecision={onApplyLineDecision} />
-        </>
-      }
+      onApplyLineDecision={onApplyLineDecision}
+      controlsClassName="right-0 top-0"
+      className="min-w-0"
     >
       {renderLineUnit(unit, block)}
-    </UnitCardShell>
+    </ReviewAnchor>
   ));
 }
 
-function renderItemUnitsBlock(
+function renderListItemBody(oldItem: ListItem | null, newItem: ListItem | null, key: string) {
+  const checked = typeof newItem?.checked === 'boolean' ? newItem.checked : oldItem?.checked;
+  const oldChecked = typeof oldItem?.checked === 'boolean' ? oldItem.checked : null;
+  const newChecked = typeof newItem?.checked === 'boolean' ? newItem.checked : null;
+  const checkboxChanged = oldChecked !== null && newChecked !== null && oldChecked !== newChecked;
+  const children = renderChildrenBlocks(
+    (oldItem?.children || []) as Content[],
+    (newItem?.children || []) as Content[],
+    `${key}-children`
+  );
+
+  return (
+    <>
+      {(oldChecked !== null || newChecked !== null) ? (
+        <span className={`mr-2 inline-flex h-4 w-4 items-center justify-center rounded border text-[10px] ${checkboxChanged ? diffStructuralClassName : 'border-theme-border/30 bg-theme-bg/70'}`}>
+          {(checked ? 'x' : '')}
+        </span>
+      ) : null}
+      <div className="inline-flex min-w-0 flex-col gap-1 align-top">{children}</div>
+    </>
+  );
+}
+
+function renderListReviewItem({
+  oldItem,
+  newItem,
+  key,
+  unit,
+  selectedLineId,
+  onSelectLine,
+  onApplyLineDecision,
+  toneClass = '',
+}: {
+  oldItem: ListItem | null;
+  newItem: ListItem | null;
+  key: string;
+  unit: ReviewUnit | null;
+  selectedLineId: string | null;
+  onSelectLine?: (lineId: string) => void;
+  onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>;
+  toneClass?: string;
+}) {
+  const content = renderListItemBody(oldItem, newItem, key);
+  if (!unit) {
+    return <li key={key} className={`my-1 ${toneClass}`}>{content}</li>;
+  }
+
+  return (
+    <li key={key} className={`my-1 ${toneClass}`}>
+      <ReviewAnchor
+        unit={unit}
+        selectedLineId={selectedLineId}
+        onSelectLine={onSelectLine}
+        onApplyLineDecision={onApplyLineDecision}
+        controlsClassName="right-0 top-0"
+        className="min-w-0"
+      >
+        {content}
+      </ReviewAnchor>
+    </li>
+  );
+}
+
+function renderListBlockUnits(
   block: DiffBlock,
   selectedLineId: string | null,
   onSelectLine?: (lineId: string) => void,
   onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>
 ) {
-  return block.reviewUnits.map((unit) => (
-    <UnitCardShell
-      key={unit.id}
-      unit={unit}
-      selectedLineId={selectedLineId}
-      onSelectLine={onSelectLine}
-      controls={
-        <>
-          {renderUnitSummary(unit)}
-          <DecisionButtons unit={unit} onApplyLineDecision={onApplyLineDecision} />
-        </>
+  const oldList = primaryNode(block.oldRoot) as List | null;
+  const newList = primaryNode(block.newRoot) as List | null;
+  if ((!oldList || oldList.type !== 'list') && (!newList || newList.type !== 'list')) {
+    return renderLineUnitsBlock(block, selectedLineId, onSelectLine, onApplyLineDecision);
+  }
+
+  const ordered = Boolean(newList?.ordered ?? oldList?.ordered);
+  const Tag = ordered ? 'ol' : 'ul';
+  const oldItems = (oldList?.children || []) as ListItem[];
+  const newItems = (newList?.children || []) as ListItem[];
+  const parts = diffArrays<ListItem>(oldItems, newItems, {
+    comparator: (left, right) => toString(left) === toString(right) && left.checked === right.checked,
+  });
+  const units = [...block.reviewUnits];
+  let unitIndex = 0;
+  const nextUnit = () => units[unitIndex++] || null;
+  const items: ReactNode[] = [];
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    if (!part.added && !part.removed) {
+      items.push(
+        ...part.value.map((item, itemIndex) =>
+          renderListReviewItem({
+            oldItem: item,
+            newItem: item,
+            key: `${block.id}-eq-${index}-${itemIndex}`,
+            unit: null,
+            selectedLineId,
+            onSelectLine,
+            onApplyLineDecision,
+          })
+        )
+      );
+      continue;
+    }
+
+    if (part.removed && index + 1 < parts.length && parts[index + 1].added) {
+      const removed = part.value;
+      const added = parts[index + 1].value;
+      const shared = Math.min(removed.length, added.length);
+      for (let offset = 0; offset < shared; offset += 1) {
+        items.push(
+          renderListReviewItem({
+            oldItem: removed[offset],
+            newItem: added[offset],
+            key: `${block.id}-pair-${index}-${offset}`,
+            unit: nextUnit(),
+            selectedLineId,
+            onSelectLine,
+            onApplyLineDecision,
+          })
+        );
       }
-    >
-      {renderItemUnit(unit)}
-    </UnitCardShell>
-  ));
+      for (const [itemIndex, item] of removed.slice(shared).entries()) {
+        items.push(
+          renderListReviewItem({
+            oldItem: item,
+            newItem: null,
+            key: `${block.id}-rm-${index}-${itemIndex}`,
+            unit: nextUnit(),
+            selectedLineId,
+            onSelectLine,
+            onApplyLineDecision,
+            toneClass: diffBlockDeleteClassName,
+          })
+        );
+      }
+      for (const [itemIndex, item] of added.slice(shared).entries()) {
+        items.push(
+          renderListReviewItem({
+            oldItem: null,
+            newItem: item,
+            key: `${block.id}-ad-${index}-${itemIndex}`,
+            unit: nextUnit(),
+            selectedLineId,
+            onSelectLine,
+            onApplyLineDecision,
+            toneClass: diffBlockInsertClassName,
+          })
+        );
+      }
+      index += 1;
+      continue;
+    }
+
+    if (part.removed) {
+      items.push(
+        ...part.value.map((item, itemIndex) =>
+          renderListReviewItem({
+            oldItem: item,
+            newItem: null,
+            key: `${block.id}-del-${index}-${itemIndex}`,
+            unit: nextUnit(),
+            selectedLineId,
+            onSelectLine,
+            onApplyLineDecision,
+            toneClass: diffBlockDeleteClassName,
+          })
+        )
+      );
+      continue;
+    }
+
+    items.push(
+      ...part.value.map((item, itemIndex) =>
+        renderListReviewItem({
+          oldItem: null,
+          newItem: item,
+          key: `${block.id}-ins-${index}-${itemIndex}`,
+          unit: nextUnit(),
+          selectedLineId,
+          onSelectLine,
+          onApplyLineDecision,
+          toneClass: diffBlockInsertClassName,
+        })
+      )
+    );
+  }
+
+  return <Tag className={`my-0 ${ordered ? 'list-decimal pl-5' : 'list-disc pl-5'}`}>{items}</Tag>;
 }
 
-function renderStructuredBlockCard(
-  block: DiffBlock,
+function resolveUnitForNode(block: DiffBlock, node: TableRow | null) {
+  if (!node) return null;
+  const lineIds = sliceRowsByPosition(block.rows, node)
+    .map((row) => row.id)
+    .filter((id): id is string => Boolean(id));
+  return block.reviewUnits.find((unit) => unit.lineIds.some((lineId) => lineIds.includes(lineId))) || null;
+}
+
+function renderTableCellWithOverlay(
+  oldCell: TableCell | null,
+  newCell: TableCell | null,
+  key: string,
+  unit: ReviewUnit | null,
   selectedLineId: string | null,
-  onSelectLine: ((lineId: string) => void) | undefined,
-  onApplyLineDecision: ((lineId: string | string[], decision: ReviewDecision) => void | Promise<void>) | undefined,
-  content: ReactNode,
-  extraControls?: ReactNode
+  onSelectLine?: (lineId: string) => void,
+  onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>
 ) {
-  const blockUnit = block.reviewUnits[0];
+  const content = renderInlineFromNodes(
+    ((oldCell?.children || []) as PhrasingContent[]),
+    ((newCell?.children || []) as PhrasingContent[]),
+    `${key}-cell`
+  );
+
+  if (!unit) {
+    return <td key={key} className="border border-theme-border/20 px-2 py-1 align-top">{content}</td>;
+  }
 
   return (
-    <UnitCardShell
-      unit={blockUnit}
-      selectedLineId={selectedLineId}
-      onSelectLine={onSelectLine}
-      controls={
-        <>
-          <div className="flex items-center gap-3">
-            {renderUnitSummary(blockUnit)}
-            {extraControls}
-          </div>
-          <DecisionButtons unit={blockUnit} onApplyLineDecision={onApplyLineDecision} />
-        </>
-      }
-    >
-      {content}
-    </UnitCardShell>
+    <td key={key} className="border border-theme-border/20 px-2 py-1 align-top">
+      <ReviewAnchor
+        unit={unit}
+        selectedLineId={selectedLineId}
+        onSelectLine={onSelectLine}
+        onApplyLineDecision={onApplyLineDecision}
+        controlsClassName="right-0 top-0"
+        className="min-w-0"
+        testId={false}
+      >
+        {content}
+      </ReviewAnchor>
+    </td>
   );
 }
 
@@ -1067,7 +1536,6 @@ function renderCodeBlockUnits(
   const fencePattern = /^\s*(`{3,}|~{3,})(.*)$/;
   const firstFence = rawLines[0]?.match(fencePattern);
   const lastFence = rawLines.length > 1 ? rawLines[rawLines.length - 1]?.match(fencePattern) : null;
-  const langLabel = firstFence?.[2]?.trim() || '';
   const startIndex = firstFence && block.rows[0]?.status === 'equal' ? 1 : 0;
   const endIndex =
     lastFence && block.rows[block.rows.length - 1]?.status === 'equal'
@@ -1075,52 +1543,94 @@ function renderCodeBlockUnits(
       : block.rows.length;
   const codeRows = block.rows.slice(startIndex, endIndex);
   const unitByLineId = new Map(block.reviewUnits.flatMap((unit) => unit.lineIds.map((lineId) => [lineId, unit] as const)));
+  const describeFence = (
+    value: string | null,
+    position: 'opening' | 'closing',
+    fallbackWhenCounterpartIsFence: boolean
+  ) => {
+    if (!value) return null;
+    const match = value.match(fencePattern);
+    if (match) {
+      const info = match[2].trim().split(/\s+/)[0] || '';
+      return info ? `${position} fence · ${info}` : `${position} fence`;
+    }
+    return fallbackWhenCounterpartIsFence ? `${position} fence` : null;
+  };
 
   return (
-    <UnitCardShell
-      unit={block.reviewUnits[0]}
-      selectedLineId={selectedLineId}
-      onSelectLine={onSelectLine}
-      controls={
-        <>
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] uppercase tracking-[0.14em] text-theme-text/45">{langLabel || 'Code block'}</span>
-            <span className="text-[11px] text-theme-text/35">{block.reviewUnits.length} changed line{block.reviewUnits.length === 1 ? '' : 's'}</span>
-          </div>
-          <span className="text-[11px] text-theme-text/35">Review each changed code line below</span>
-        </>
-      }
-    >
-      <div className={`${markdownCodeBlockClassName} bg-theme-bg/78`}>
-        {langLabel ? <div className="border-b border-theme-border/12 px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-theme-text/45">{langLabel}</div> : null}
+    <div data-testid="diff-review-unit" data-review-unit="code" className="min-w-0">
+      <div className={markdownCodeBlockClassName}>
         <pre className="m-0 overflow-x-auto bg-transparent py-2 text-xs text-theme-text">
           <code>
             {codeRows.map((row, index) => {
               const unit = row.id ? unitByLineId.get(row.id) : null;
-              const lineNumber = row.newLineNumber ?? row.oldLineNumber ?? row.reviewLineNumber;
+              const blockIndex = startIndex + index;
+              const position = blockIndex === 0 ? 'opening' : 'closing';
+              const oldFenceLabel = describeFence(
+                row.oldText,
+                position,
+                Boolean(row.newText?.match(fencePattern))
+              );
+              const newFenceLabel = describeFence(
+                row.newText,
+                position,
+                Boolean(row.oldText?.match(fencePattern))
+              );
+              const isFenceRow = Boolean(oldFenceLabel || newFenceLabel);
               return (
                 <div
                   key={`${block.id}-code-row-${index}`}
-                  className={`grid grid-cols-[3rem_auto_minmax(0,1fr)] items-start gap-2 px-2 py-0.5 ${unit && unitIsSelected(unit, selectedLineId) ? 'bg-theme-text/6' : ''}`}
+                  data-testid={unit ? 'diff-review-unit' : undefined}
+                  data-review-unit={unit?.kind}
+                  className="group/review relative px-3 py-0.5"
                   onMouseEnter={() => {
                     const firstLineId = unit?.lineIds[0];
                     if (firstLineId) onSelectLine?.(firstLineId);
                   }}
                 >
-                  <span className="select-none text-[10px] leading-5 text-theme-text/30">{lineNumber}</span>
-                  <div className="pt-0.5">
-                    {unit ? <DecisionButtons unit={unit} onApplyLineDecision={onApplyLineDecision} /> : <span className="block h-5 w-5" />}
-                  </div>
+                  {unit ? (
+                    <ReviewControlsOverlay
+                      unit={unit}
+                      selectedLineId={selectedLineId}
+                      onApplyLineDecision={onApplyLineDecision}
+                      className="right-1 top-1"
+                    />
+                  ) : null}
                   <div className="min-w-0">
-                    {row.status === 'modify' ? (
-                      <div className="grid grid-cols-2 gap-px">
-                        <div className="bg-rose-500/12 px-2 py-0.5 line-through decoration-rose-700/80">{row.oldText || ' '}</div>
-                        <div className="bg-emerald-500/12 px-2 py-0.5">{row.newText || ' '}</div>
+                    {isFenceRow ? (
+                      <div className="space-y-1 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-theme-text/50">
+                        {row.status === 'modify' ? (
+                          <>
+                            {oldFenceLabel ? (
+                              <div className="inline-flex rounded-sm bg-rose-500/10 px-1.5 py-0.5 text-rose-800 line-through decoration-rose-700/80">
+                                {oldFenceLabel}
+                              </div>
+                            ) : null}
+                            {newFenceLabel ? (
+                              <div className="inline-flex rounded-sm bg-emerald-500/10 px-1.5 py-0.5 text-emerald-800">
+                                {newFenceLabel}
+                              </div>
+                            ) : null}
+                          </>
+                        ) : row.status === 'remove' ? (
+                          <div className="inline-flex rounded-sm bg-rose-500/10 px-1.5 py-0.5 text-rose-800 line-through decoration-rose-700/80">
+                            {oldFenceLabel}
+                          </div>
+                        ) : row.status === 'add' ? (
+                          <div className="inline-flex rounded-sm bg-emerald-500/10 px-1.5 py-0.5 text-emerald-800">
+                            {newFenceLabel}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : row.status === 'modify' ? (
+                      <div className="space-y-px">
+                        <div className="bg-rose-500/10 px-2 py-0.5 line-through decoration-rose-700/80">{row.oldText || ' '}</div>
+                        <div className="bg-emerald-500/10 px-2 py-0.5">{row.newText || ' '}</div>
                       </div>
                     ) : row.status === 'remove' ? (
-                      <div className="bg-rose-500/12 px-2 py-0.5 line-through decoration-rose-700/80">{row.oldText || ' '}</div>
+                      <div className="bg-rose-500/10 px-2 py-0.5 line-through decoration-rose-700/80">{row.oldText || ' '}</div>
                     ) : row.status === 'add' ? (
-                      <div className="bg-emerald-500/12 px-2 py-0.5">{row.newText || ' '}</div>
+                      <div className="bg-emerald-500/10 px-2 py-0.5">{row.newText || ' '}</div>
                     ) : (
                       <div className="px-2 py-0.5">{row.newText || row.oldText || ' '}</div>
                     )}
@@ -1131,7 +1641,7 @@ function renderCodeBlockUnits(
           </code>
         </pre>
       </div>
-    </UnitCardShell>
+    </div>
   );
 }
 
@@ -1141,37 +1651,151 @@ function renderTableBlockUnits(
   onSelectLine?: (lineId: string) => void,
   onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>
 ) {
+  const oldTable = primaryNode(block.oldRoot) as Table | null;
+  const newTable = primaryNode(block.newRoot) as Table | null;
+  if ((!oldTable || oldTable.type !== 'table') && (!newTable || newTable.type !== 'table')) {
+    return renderBlockContent(block);
+  }
+
+  const oldRows = (oldTable?.children || []) as TableRow[];
+  const newRows = (newTable?.children || []) as TableRow[];
+  const header = newRows[0] || oldRows[0] || null;
+  const bodyParts = diffArrays<TableRow>(oldRows.slice(1), newRows.slice(1), {
+    comparator: (left, right) => toString(left) === toString(right),
+  });
+  const bodyRows: ReactNode[] = [];
+
+  for (let index = 0; index < bodyParts.length; index += 1) {
+    const part = bodyParts[index];
+    if (!part.added && !part.removed) {
+      bodyRows.push(
+        ...part.value.map((row, rowIndex) => (
+          <tr key={`${block.id}-eq-${index}-${rowIndex}`}>
+            {row.children.map((cell, cellIndex) => renderTableCellWithOverlay(cell, cell, `${block.id}-eq-cell-${index}-${rowIndex}-${cellIndex}`, null, selectedLineId, onSelectLine, onApplyLineDecision))}
+          </tr>
+        ))
+      );
+      continue;
+    }
+
+    if (part.removed && index + 1 < bodyParts.length && bodyParts[index + 1].added) {
+      const removed = part.value;
+      const added = bodyParts[index + 1].value;
+      const shared = Math.min(removed.length, added.length);
+      for (let offset = 0; offset < shared; offset += 1) {
+        const oldRow = removed[offset];
+        const newRow = added[offset];
+        const unit = resolveUnitForNode(block, newRow) || resolveUnitForNode(block, oldRow);
+        bodyRows.push(
+          <tr key={`${block.id}-pair-${index}-${offset}`}>
+            {Array.from({ length: Math.max(oldRow.children.length, newRow.children.length) }).map((_, cellIndex) =>
+              renderTableCellWithOverlay(
+                oldRow.children[cellIndex] || null,
+                newRow.children[cellIndex] || null,
+                `${block.id}-pair-cell-${index}-${offset}-${cellIndex}`,
+                cellIndex === 0 ? unit : null,
+                selectedLineId,
+                onSelectLine,
+                onApplyLineDecision
+              )
+            )}
+          </tr>
+        );
+      }
+      for (const [rowIndex, row] of removed.slice(shared).entries()) {
+        const unit = resolveUnitForNode(block, row);
+        bodyRows.push(
+          <tr key={`${block.id}-rm-${index}-${rowIndex}`} className="bg-rose-500/10">
+            {row.children.map((cell, cellIndex) =>
+              renderTableCellWithOverlay(cell, null, `${block.id}-rm-cell-${index}-${rowIndex}-${cellIndex}`, cellIndex === 0 ? unit : null, selectedLineId, onSelectLine, onApplyLineDecision)
+            )}
+          </tr>
+        );
+      }
+      for (const [rowIndex, row] of added.slice(shared).entries()) {
+        const unit = resolveUnitForNode(block, row);
+        bodyRows.push(
+          <tr key={`${block.id}-ad-${index}-${rowIndex}`} className="bg-emerald-500/10">
+            {row.children.map((cell, cellIndex) =>
+              renderTableCellWithOverlay(null, cell, `${block.id}-ad-cell-${index}-${rowIndex}-${cellIndex}`, cellIndex === 0 ? unit : null, selectedLineId, onSelectLine, onApplyLineDecision)
+            )}
+          </tr>
+        );
+      }
+      index += 1;
+      continue;
+    }
+
+    if (part.removed) {
+      bodyRows.push(
+        ...part.value.map((row, rowIndex) => {
+          const unit = resolveUnitForNode(block, row);
+          return (
+            <tr key={`${block.id}-del-${index}-${rowIndex}`} className="bg-rose-500/10">
+              {row.children.map((cell, cellIndex) =>
+                renderTableCellWithOverlay(cell, null, `${block.id}-del-cell-${index}-${rowIndex}-${cellIndex}`, cellIndex === 0 ? unit : null, selectedLineId, onSelectLine, onApplyLineDecision)
+              )}
+            </tr>
+          );
+        })
+      );
+      continue;
+    }
+
+    bodyRows.push(
+      ...part.value.map((row, rowIndex) => {
+        const unit = resolveUnitForNode(block, row);
+        return (
+          <tr key={`${block.id}-ins-${index}-${rowIndex}`} className="bg-emerald-500/10">
+            {row.children.map((cell, cellIndex) =>
+              renderTableCellWithOverlay(null, cell, `${block.id}-ins-cell-${index}-${rowIndex}-${cellIndex}`, cellIndex === 0 ? unit : null, selectedLineId, onSelectLine, onApplyLineDecision)
+            )}
+          </tr>
+        );
+      })
+    );
+  }
+
   return (
-    <UnitCardShell
-      unit={block.reviewUnits[0]}
+    <div data-testid="diff-review-unit" data-review-unit="table" className="min-w-0 overflow-x-auto">
+      <table className="w-full border-collapse text-sm">
+        {header ? (
+          <thead>
+            <tr>
+              {header.children.map((cell, cellIndex) => (
+                <th key={`${block.id}-head-${cellIndex}`} className="border border-theme-border/20 px-2 py-1 text-left font-semibold">
+                  {renderInlineFromNodes((cell.children || []) as PhrasingContent[], (cell.children || []) as PhrasingContent[], `${block.id}-head-cell-${cellIndex}`)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+        ) : null}
+        <tbody>{bodyRows}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function renderBlockUnit(
+  block: DiffBlock,
+  selectedLineId: string | null,
+  onSelectLine?: (lineId: string) => void,
+  onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>
+) {
+  const unit = block.reviewUnits[0];
+  if (!unit) return renderBlockContent(block);
+
+  return (
+    <ReviewAnchor
+      unit={unit}
       selectedLineId={selectedLineId}
       onSelectLine={onSelectLine}
-      controls={
-        <>
-          <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-theme-text/45">
-            <span>Table</span>
-            <span className="normal-case tracking-normal text-theme-text/35">{block.reviewUnits.length} changed row{block.reviewUnits.length === 1 ? '' : 's'}</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-1">
-            {block.reviewUnits.map((unit) => (
-              <div
-                key={unit.id}
-                className={`flex items-center gap-1 rounded-md border border-theme-border/14 px-1.5 py-0.5 ${unitIsSelected(unit, selectedLineId) ? 'bg-theme-text/6' : 'bg-theme-bg/55'}`}
-                onMouseEnter={() => {
-                  const firstLineId = unit.lineIds[0];
-                  if (firstLineId) onSelectLine?.(firstLineId);
-                }}
-              >
-                <span className="text-[10px] text-theme-text/35">{unit.label || `Row ${unitFirstLineNumber(unit) ?? ''}`}</span>
-                <DecisionButtons unit={unit} onApplyLineDecision={onApplyLineDecision} />
-              </div>
-            ))}
-          </div>
-        </>
-      }
+      onApplyLineDecision={onApplyLineDecision}
+      controlsClassName="right-0 top-0"
+      className="min-w-0"
     >
       {renderBlockContent(block)}
-    </UnitCardShell>
+    </ReviewAnchor>
   );
 }
 
@@ -1184,19 +1808,20 @@ function renderBlockCards(
   switch (block.kind) {
     case 'heading':
     case 'paragraph':
+    case 'blockquote':
     case 'unknown':
     case 'blank':
       return renderLineUnitsBlock(block, selectedLineId, onSelectLine, onApplyLineDecision);
     case 'list':
     case 'task_list':
-      return renderItemUnitsBlock(block, selectedLineId, onSelectLine, onApplyLineDecision);
+      return renderListBlockUnits(block, selectedLineId, onSelectLine, onApplyLineDecision);
     case 'code':
     case 'mermaid':
       return renderCodeBlockUnits(block, selectedLineId, onSelectLine, onApplyLineDecision);
     case 'table':
       return renderTableBlockUnits(block, selectedLineId, onSelectLine, onApplyLineDecision);
     default:
-      return renderStructuredBlockCard(block, selectedLineId, onSelectLine, onApplyLineDecision, renderBlockContent(block));
+      return renderBlockUnit(block, selectedLineId, onSelectLine, onApplyLineDecision);
   }
 }
 

@@ -85,6 +85,7 @@ describe('Timeline', () => {
             summary: 'Edit note',
             change_type: 'edit',
             context_snapshot: 'old-content',
+            result_snapshot: 'version-result-content',
           },
         ],
       },
@@ -105,10 +106,64 @@ describe('Timeline', () => {
     fireEvent.click(screen.getByText('Edit note'));
 
     await waitFor(() => {
+        expect(mocks.setActiveDiff).toHaveBeenCalledWith(
+          expect.objectContaining({
+            fileId: 'file-1',
+            versionId: 'v1',
+            oldContent: 'old-content',
+            newContent: 'version-result-content',
+          })
+        );
+        expect(mocks.setTabMode).toHaveBeenCalledWith('pane-1', 'file-1', 'diff');
+      });
+  });
+
+  it('compares a historical version against the next newer snapshot instead of current file content', async () => {
+    mocks.apiGetFileVersions.mockResolvedValue({
+      success: true,
+      data: {
+        versions: [
+          {
+            id: 'v-newer',
+            timestamp: new Date().toISOString(),
+            author: 'human',
+            summary: 'Newer edit',
+            change_type: 'edit',
+            context_snapshot: 'content-after-v-old',
+            result_snapshot: 'current-file-content',
+          },
+          {
+            id: 'v-old',
+            timestamp: new Date(Date.now() - 1_000).toISOString(),
+            author: 'human',
+            summary: 'Older edit',
+            change_type: 'edit',
+            context_snapshot: 'content-before-v-old',
+          },
+        ],
+      },
+    });
+    mocks.apiGetFileContent.mockResolvedValue({
+      success: true,
+      data: { content: 'current-file-content' },
+    });
+
+    render(<Timeline />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Older edit')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Older edit'));
+
+    await waitFor(() => {
       expect(mocks.setActiveDiff).toHaveBeenCalledWith(
-        expect.objectContaining({ fileId: 'file-1', versionId: 'v1' })
+        expect.objectContaining({
+          versionId: 'v-old',
+          oldContent: 'content-before-v-old',
+          newContent: 'content-after-v-old',
+        })
       );
-      expect(mocks.setTabMode).toHaveBeenCalledWith('pane-1', 'file-1', 'diff');
     });
   });
 

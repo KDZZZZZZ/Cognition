@@ -1,6 +1,6 @@
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import event
+from sqlalchemy import event, inspect, text
 from app.config import settings
 from app.models import Base
 
@@ -57,3 +57,14 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(_ensure_runtime_schema)
+
+
+def _ensure_runtime_schema(sync_conn):
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("versions"):
+        return
+
+    version_columns = {column["name"] for column in inspector.get_columns("versions")}
+    if "result_snapshot" not in version_columns:
+        sync_conn.execute(text("ALTER TABLE versions ADD COLUMN result_snapshot TEXT"))

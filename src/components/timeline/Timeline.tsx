@@ -94,7 +94,8 @@ export function Timeline() {
       }
 
       const versions = versionsResponse.data.versions || [];
-      const targetVersion = versions.find((v: FileVersion) => v.id === item.id);
+      const targetIndex = versions.findIndex((v: FileVersion) => v.id === item.id);
+      const targetVersion = targetIndex === -1 ? null : versions[targetIndex];
 
       if (!targetVersion) {
         console.error('Version not found');
@@ -102,7 +103,12 @@ export function Timeline() {
       }
 
       const oldContent = targetVersion.context_snapshot || '';
-      const newContent = currentContent;
+      const newerNeighbor = targetIndex > 0 ? versions[targetIndex - 1] : null;
+      const newContent =
+        targetVersion.result_snapshot ??
+        (newerNeighbor?.context_snapshot !== undefined && newerNeighbor?.context_snapshot !== null
+          ? newerNeighbor.context_snapshot
+          : currentContent);
 
       setActiveDiff({
         fileId: activeFileId,

@@ -108,8 +108,11 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       if (pendingDiffRequestRef.current !== requestId) return;
       if (response.success && response.data?.event) {
         setPendingDiffEvent(response.data.event);
-        const firstPending = response.data.event.lines.find((line) => line.decision === 'pending');
-        setSelectedLineId(firstPending?.id || null);
+        setSelectedLineId((currentSelectedLineId) =>
+          currentSelectedLineId && response.data?.event?.lines.some((line) => line.id === currentSelectedLineId)
+            ? currentSelectedLineId
+            : null
+        );
       } else {
         setPendingDiffEvent(null);
         setSelectedLineId(null);
