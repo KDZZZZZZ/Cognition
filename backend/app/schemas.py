@@ -166,6 +166,12 @@ class DiffLineUpdateRequest(BaseModel):
     decision: LineDecision
 
 
+class DiffEventContentUpdateRequest(BaseModel):
+    new_content: str
+    summary: Optional[str] = None
+    author: Author = Author.HUMAN
+
+
 class DiffEventFinalizeRequest(BaseModel):
     final_content: Optional[str] = None
     summary: Optional[str] = "Finalize diff event"

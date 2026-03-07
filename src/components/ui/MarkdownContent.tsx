@@ -11,6 +11,7 @@ interface MarkdownContentProps {
   content: string;
   className?: string;
   variant?: 'default' | 'diff';
+  hideFootnotesSection?: boolean;
 }
 
 interface MarkdownSegment {
@@ -113,7 +114,7 @@ function splitMarkdownSegments(content: string): MarkdownSegment[] {
   return segments;
 }
 
-export function MarkdownContent({ content, className, variant = 'default' }: MarkdownContentProps) {
+export function MarkdownContent({ content, className, variant = 'default', hideFootnotesSection = false }: MarkdownContentProps) {
   const isDiffVariant = variant === 'diff';
   const { entries, body } = extractFrontmatter(content);
   const segments = splitMarkdownSegments(body);
@@ -187,7 +188,7 @@ export function MarkdownContent({ content, className, variant = 'default' }: Mar
 
   return (
     <div
-      className={`${markdownProseClassName} ${className || ''}`}
+      className={`${markdownProseClassName} ${hideFootnotesSection ? '[&_section[data-footnotes]]:hidden [&_.footnotes]:hidden' : ''} ${className || ''}`}
     >
       {entries.length > 0 ? (
         <div className="mb-4 overflow-x-auto rounded-md border border-theme-border/20">

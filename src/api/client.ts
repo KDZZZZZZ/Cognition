@@ -190,6 +190,7 @@ export interface DiffEventDTO {
   status: DiffEventStatus;
   old_content: string;
   new_content: string;
+  effective_content?: string;
   created_at: string;
   resolved_at?: string | null;
   lines: DiffLineDTO[];
@@ -466,6 +467,18 @@ class ApiClient {
 
   async updateDiffLineDecision(fileId: string, eventId: string, lineId: string, decision: LineDecision) {
     return this.patch(`/api/v1/files/${fileId}/diff-events/${eventId}/lines/${lineId}`, { decision });
+  }
+
+  async updateDiffEventContent(
+    fileId: string,
+    eventId: string,
+    payload: { newContent: string; summary?: string; author?: 'human' | 'agent' }
+  ): Promise<ApiResponse<{ event: DiffEventDTO }>> {
+    return this.patch(`/api/v1/files/${fileId}/diff-events/${eventId}/content`, {
+      new_content: payload.newContent,
+      summary: payload.summary,
+      author: payload.author || 'human',
+    });
   }
 
   async finalizeDiffEvent(

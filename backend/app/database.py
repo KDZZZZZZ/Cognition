@@ -68,3 +68,42 @@ def _ensure_runtime_schema(sync_conn):
     version_columns = {column["name"] for column in inspector.get_columns("versions")}
     if "result_snapshot" not in version_columns:
         sync_conn.execute(text("ALTER TABLE versions ADD COLUMN result_snapshot TEXT"))
+
+    _normalize_legacy_enum_storage(sync_conn)
+
+
+def _normalize_legacy_enum_storage(sync_conn) -> None:
+    """Normalize legacy enum rows to the storage format expected by SQLAlchemy enums.
+
+    The ORM stores enum names (for example `HUMAN`, `EDIT`) rather than enum values
+    (`human`, `edit`). Some repair/backfill scripts wrote value-style rows directly
+    into SQLite, which breaks ORM reads for timeline/version APIs.
+    """
+    sync_conn.execute(
+        text(
+            """
+            UPDATE versions
+            SET author = CASE author
+                WHEN 'human' THEN 'HUMAN'
+                WHEN 'agent' THEN 'AGENT'
+                ELSE author
+            END
+            WHERE author IN ('human', 'agent')
+            """
+        )
+    )
+    sync_conn.execute(
+        text(
+            """
+            UPDATE versions
+            SET change_type = CASE change_type
+                WHEN 'edit' THEN 'EDIT'
+                WHEN 'refactor' THEN 'REFACTOR'
+                WHEN 'delete' THEN 'DELETE'
+                WHEN 'create' THEN 'CREATE'
+                ELSE change_type
+            END
+            WHERE change_type IN ('edit', 'refactor', 'delete', 'create')
+            """
+        )
+    )

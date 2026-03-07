@@ -68,7 +68,8 @@ function detectCallout(node: Content | null): DiffCalloutMeta | null {
   if (!firstChild || firstChild.type !== 'paragraph') return null;
   const firstText = ((firstChild as Parent).children?.[0] as any)?.value;
   if (typeof firstText !== 'string') return null;
-  const match = firstText.match(/^\[!(\w+)\]\s*(.*)$/);
+  const [firstLine = ''] = firstText.split('\n');
+  const match = firstLine.match(/^\[!(\w+)\]\s*(.*)$/);
   if (!match) return null;
   return {
     kind: match[1].toLowerCase(),

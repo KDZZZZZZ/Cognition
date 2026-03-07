@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { X, Split, Download, GitCommit, GripVertical, Plus, MessageSquare, FileText, Loader2 } from 'lucide-react';
 import { Pane } from '../../types';
-import { TiptapMarkdownEditor } from '../editor/TiptapMarkdownEditor';
 import { SessionView } from '../session/SessionView';
 import { PDFViewer } from '../pdf/PDFViewer';
 import { RenderedDiffViewer } from '../editor/RenderedDiffViewer';
 import { MarkdownContent } from '../ui/MarkdownContent';
+import { MarkdownDocumentEditor } from '../editor/MarkdownDocumentEditor';
 import { handleScrollableKeyDown } from '../ui/scrollKeyboard';
 import { usePaneStore } from '../../stores/paneStore';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -69,48 +69,6 @@ function composePendingDiffContent(
     .join('\n');
 }
 
-function hasFrontmatter(content: string) {
-  return /^(---|\+\+\+)\s*\n[\s\S]*?\n\1(?:\n|$)/.test(content);
-}
-
-function hasTable(content: string) {
-  return /(^|\n)\|?.+\|.+\n\|?\s*:?-{3,}.*\|/m.test(content);
-}
-
-function hasFootnotes(content: string) {
-  return /\[\^[^\]]+\](?::)?/.test(content);
-}
-
-function hasHtml(content: string) {
-  return /<\/?[A-Za-z][\w:-]*(?:\s[^>]*)?>/.test(content);
-}
-
-function hasTaskList(content: string) {
-  return /^\s*[-*+]\s+\[[ xX]\]\s+/m.test(content);
-}
-
-function hasFencedCodeBlock(content: string) {
-  return /(^|\n)(`{3,}|~{3,})/.test(content);
-}
-
-function hasCallout(content: string) {
-  return /^\s*>\s*\[![A-Z]+\]/m.test(content);
-}
-
-function shouldUseRenderedMarkdownPreview(content: string) {
-  if (!content.trim()) return false;
-
-  return (
-    hasFrontmatter(content) ||
-    hasTable(content) ||
-    hasFootnotes(content) ||
-    hasHtml(content) ||
-    hasTaskList(content) ||
-    hasFencedCodeBlock(content) ||
-    hasCallout(content)
-  );
-}
-
 export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLeave, onDrop }: PaneRendererProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [draggedTabInfo, setDraggedTabInfo] = useState<{ sourcePaneId: string; tabId: string } | null>(null);
@@ -120,10 +78,8 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const [isCreating, setIsCreating] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pendingDiffEvent, setPendingDiffEvent] = useState<DiffEventDTO | null>(null);
-  const [selectedLineId, setSelectedLineId] = useState<string | null>(null);
   const [pendingDiffLoading, setPendingDiffLoading] = useState(false);
   const [pdfFileUrl, setPdfFileUrl] = useState<string | null>(null);
-  const [markdownDisplayModeByTabId, setMarkdownDisplayModeByTabId] = useState<Record<string, 'editor' | 'preview'>>({});
   const previousContentRef = useRef<string>('');
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<{ fileId: string; fileName: string; content: string } | null>(null);
@@ -153,20 +109,13 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       if (pendingDiffRequestRef.current !== requestId) return;
       if (response.success && response.data?.event) {
         setPendingDiffEvent(response.data.event);
-        setSelectedLineId((currentSelectedLineId) =>
-          currentSelectedLineId && response.data?.event?.lines.some((line) => line.id === currentSelectedLineId)
-            ? currentSelectedLineId
-            : null
-        );
       } else {
         setPendingDiffEvent(null);
-        setSelectedLineId(null);
       }
     } catch (err) {
       if (pendingDiffRequestRef.current !== requestId) return;
       console.error('Failed to load pending diff event:', err);
       setPendingDiffEvent(null);
-      setSelectedLineId(null);
     } finally {
       if (pendingDiffRequestRef.current === requestId) {
         setPendingDiffLoading(false);
@@ -226,7 +175,6 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     } else {
       pendingDiffRequestRef.current += 1;
       setPendingDiffEvent(null);
-      setSelectedLineId(null);
     }
   }, [activeTab, getFileContent, loadPendingDiffForFile]);
 
@@ -239,14 +187,25 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       if (pendingSaveRef.current) {
         const pending = pendingSaveRef.current;
         pendingSaveRef.current = null;
-        if (pending.content !== previousContentRef.current) {
+        if (pendingDiffEvent) {
+          const currentPendingDraft =
+            pendingDiffEvent.effective_content ||
+            composePendingDiffContent(pendingDiffEvent.lines, 'accepted');
+          if (pending.content !== currentPendingDraft) {
+            void api.updateDiffEventContent(pending.fileId, pendingDiffEvent.id, {
+              newContent: pending.content,
+              summary: pendingDiffEvent.summary || `Edit draft ${pending.fileName}`,
+              author: 'human',
+            });
+          }
+        } else if (pending.content !== previousContentRef.current) {
           void updateFileContent(pending.fileId, pending.content).then((saved) => {
             if (saved) previousContentRef.current = pending.content;
           });
         }
       }
     };
-  }, [activeTab?.id, updateFileContent]);
+  }, [activeTab?.id, pendingDiffEvent, updateFileContent]);
 
   const scheduleMarkdownSave = useCallback(
     (fileId: string, fileName: string, nextContent: string) => {
@@ -257,7 +216,15 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
         saveTimeoutRef.current = null;
       }
 
-      if (nextContent === previousContentRef.current) {
+      const currentPendingDraft =
+        pendingDiffEvent?.effective_content ||
+        (pendingDiffEvent ? composePendingDiffContent(pendingDiffEvent.lines, 'accepted') : '');
+
+      if (!pendingDiffEvent && nextContent === previousContentRef.current) {
+        pendingSaveRef.current = null;
+        return;
+      }
+      if (pendingDiffEvent && nextContent === currentPendingDraft) {
         pendingSaveRef.current = null;
         return;
       }
@@ -273,6 +240,19 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
 
         pendingSaveRef.current = null;
         saveTimeoutRef.current = null;
+
+        if (pendingDiffEvent) {
+          const response = await api.updateDiffEventContent(fileId, pendingDiffEvent.id, {
+            newContent: nextContent,
+            summary: pendingDiffEvent.summary || `Edit draft ${fileName}`,
+            author: 'human',
+          });
+          if (response.success && response.data?.event) {
+            setPendingDiffEvent(response.data.event);
+            setFileContent(response.data.event.effective_content || nextContent);
+          }
+          return;
+        }
 
         const oldContent = previousContentRef.current;
         const saved = await updateFileContent(fileId, nextContent);
@@ -291,7 +271,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
         previousContentRef.current = nextContent;
       }, 320);
     },
-    [addVersion, updateFileContent]
+    [addVersion, pendingDiffEvent, updateFileContent]
   );
 
   useEffect(() => {
@@ -505,48 +485,11 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     setIsDragOver(false);
   }, [pane.id, moveTabToPane, onDrop]);
 
-  const applyLineDecision = useCallback(async (decision: 'accepted' | 'rejected', lineId?: string | string[]) => {
-    if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
-
-    const requestedLineIds = Array.isArray(lineId)
-      ? lineId
-      : lineId
-        ? [lineId]
-        : selectedLineId
-          ? [selectedLineId]
-          : [];
-
-    const targetLines = requestedLineIds.length > 0
-      ? pendingDiffEvent.lines.filter((line) => requestedLineIds.includes(line.id))
-      : [];
-
-    if (targetLines.length === 0) {
-      const fallbackLine = pendingDiffEvent.lines.find((line) => line.decision === 'pending');
-      if (!fallbackLine) return;
-      targetLines.push(fallbackLine);
-    }
-
-    await Promise.all(
-      targetLines.map((line) =>
-        api.updateDiffLineDecision(activeTab.id, pendingDiffEvent.id, line.id, decision)
-      )
-    );
-    await loadPendingDiffForFile(activeTab.id);
-  }, [activeTab, loadPendingDiffForFile, pendingDiffEvent, selectedLineId]);
-
   const finalizePendingDiff = useCallback(async (acceptAll: boolean) => {
     if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
 
-    if (!acceptAll) {
-      const remainingPending = pendingDiffEvent.lines.filter((line) => line.decision === 'pending');
-      await Promise.all(
-        remainingPending.map((line) =>
-          api.updateDiffLineDecision(activeTab.id, pendingDiffEvent.id, line.id, 'rejected')
-        )
-      );
-    }
-
     const response = await api.finalizeDiffEvent(activeTab.id, pendingDiffEvent.id, {
+      finalContent: acceptAll ? fileContent : pendingDiffEvent.old_content,
       summary: acceptAll ? 'Accept all pending diff lines' : 'Reject all pending diff lines',
       author: 'human',
     });
@@ -555,16 +498,15 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
       pendingDiffRequestRef.current += 1;
       const finalContent =
         response.data?.final_content ||
-        composePendingDiffContent(pendingDiffEvent.lines, acceptAll ? 'accepted' : 'rejected');
+        (acceptAll ? fileContent : pendingDiffEvent.old_content);
       setFileContent(finalContent);
       previousContentRef.current = finalContent;
       setPendingDiffEvent(null);
-      setSelectedLineId(null);
       useFileStore.getState().setFileContent(activeTab.id, finalContent);
       useFileStore.getState().loadFiles();
       useFileStore.getState().getFileVersions(activeTab.id);
     }
-  }, [activeTab, pendingDiffEvent]);
+  }, [activeTab, fileContent, pendingDiffEvent]);
 
   const diffLines = useMemo(
     () => pendingDiffEvent?.lines || [],
@@ -576,18 +518,6 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     [pendingDiffEvent]
   );
 
-  const markdownPreviewAvailable = useMemo(
-    () => activeTab?.type === 'md' && shouldUseRenderedMarkdownPreview(fileContent),
-    [activeTab?.type, fileContent]
-  );
-
-  const markdownDisplayMode = useMemo(() => {
-    if (!activeTab || activeTab.type !== 'md') return 'editor' as const;
-    const override = markdownDisplayModeByTabId[activeTab.id];
-    if (override) return override;
-    return markdownPreviewAvailable ? 'preview' as const : 'editor' as const;
-  }, [activeTab, markdownDisplayModeByTabId, markdownPreviewAvailable]);
-
   const acceptedLineCount = useMemo(
     () => diffLines.filter((line) => line.decision === 'accepted' && line.old_line !== line.new_line).length,
     [diffLines]
@@ -597,6 +527,14 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
     () => diffLines.filter((line) => line.decision === 'rejected').length,
     [diffLines]
   );
+
+  useEffect(() => {
+    if (!activeTab || activeTab.type !== 'md' || !pendingDiffEvent) return;
+    const effectiveContent =
+      pendingDiffEvent.effective_content ||
+      composePendingDiffContent(pendingDiffEvent.lines, 'accepted');
+    setFileContent((current) => (current === effectiveContent ? current : effectiveContent));
+  }, [activeTab, pendingDiffEvent]);
 
   const openSessions = getAllOpenTabs()
     .filter((tab) => tab.type === 'session')
@@ -908,84 +846,20 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 </div>
               </div>
               <div className="flex-1 overflow-hidden relative">
-                <RenderedDiffViewer
-                  oldContent={pendingDiffEvent.old_content}
-                  newContent={pendingDiffEvent.new_content}
-                  mode="inline"
-                  pendingLines={diffLines}
-                  selectedLineId={selectedLineId}
-                  onSelectLine={setSelectedLineId}
-                  onApplyLineDecision={(lineId, decision) => {
-                    void applyLineDecision(decision, lineId);
-                  }}
-                />
-              </div>
-            </div>
-          ) : markdownDisplayMode === 'preview' ? (
-            <div data-testid="markdown-preview-pane" className="flex h-full flex-col bg-theme-bg">
-              <div className="flex items-center justify-end border-b border-theme-border/20 px-3 py-2 text-xs text-theme-text/60">
-                <button
-                  type="button"
-                  data-testid="markdown-preview-edit"
-                  onClick={() => {
-                    if (!activeTab || activeTab.type !== 'md') return;
-                    setMarkdownDisplayModeByTabId((current) => ({
-                      ...current,
-                      [activeTab.id]: 'editor',
-                    }));
-                  }}
-                  className="rounded border border-theme-border/25 px-2 py-1 transition-colors hover:bg-theme-text/8"
-                >
-                  Edit Markdown
-                </button>
-              </div>
-              <div
-                className="min-h-0 flex-1 overflow-auto bg-theme-surface/10 px-4 py-3 outline-none"
-                data-testid="markdown-preview-scroll"
-                onKeyDown={handleScrollableKeyDown}
-                tabIndex={0}
-              >
-                <MarkdownContent content={fileContent} />
-              </div>
-            </div>
-          ) : (
-            <div className="flex h-full min-h-0 flex-col bg-theme-bg">
-              {markdownPreviewAvailable ? (
-                <div className="flex items-center justify-end border-b border-theme-border/20 px-3 py-2 text-xs text-theme-text/60">
-                  <button
-                    type="button"
-                    data-testid="markdown-preview-open"
-                    onClick={() => {
-                      if (!activeTab || activeTab.type !== 'md') return;
-                      setMarkdownDisplayModeByTabId((current) => ({
-                        ...current,
-                        [activeTab.id]: 'preview',
-                      }));
-                    }}
-                    className="rounded border border-theme-border/25 px-2 py-1 transition-colors hover:bg-theme-text/8"
-                  >
-                    Rendered Preview
-                  </button>
-                </div>
-              ) : null}
-              <div className="min-h-0 flex-1 overflow-hidden">
-                <TiptapMarkdownEditor
-                  key={activeTab.id}
+                <MarkdownDocumentEditor
+                  fileId={activeTab.id}
+                  fileName={activeTab.name}
                   content={fileContent}
+                  baseContent={pendingDiffEvent.old_content}
+                  pendingDiffEvent={pendingDiffEvent}
+                  pendingDiffLoading={pendingDiffLoading}
                   onChange={(val) => {
                     if (!activeTab || activeTab.type !== 'md') return;
                     scheduleMarkdownSave(activeTab.id, activeTab.name, val);
                   }}
                   availableSessions={openSessions}
                   defaultSessionId={sessionId || openSessions[0]?.id}
-                  sourceFile={
-                    activeTab && activeTab.type === 'md'
-                      ? {
-                          id: activeTab.id,
-                          name: activeTab.name,
-                        }
-                      : undefined
-                  }
+                  sourceFile={{ id: activeTab.id, name: activeTab.name }}
                   onAddReferenceToSession={(targetSessionId, reference) => {
                     addSessionReference(targetSessionId, reference);
                   }}
@@ -1013,6 +887,44 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
                 />
               </div>
             </div>
+          ) : (
+            <MarkdownDocumentEditor
+              fileId={activeTab.id}
+              fileName={activeTab.name}
+              content={fileContent}
+              baseContent={previousContentRef.current}
+              onChange={(val) => {
+                if (!activeTab || activeTab.type !== 'md') return;
+                scheduleMarkdownSave(activeTab.id, activeTab.name, val);
+              }}
+              availableSessions={openSessions}
+              defaultSessionId={sessionId || openSessions[0]?.id}
+              sourceFile={{ id: activeTab.id, name: activeTab.name }}
+              onAddReferenceToSession={(targetSessionId, reference) => {
+                addSessionReference(targetSessionId, reference);
+              }}
+              onRunSelectionAction={async ({ action, targetSessionId, markdown }) => {
+                if (!activeTab || activeTab.type !== 'md') return;
+                const prompt =
+                  action === 'fix'
+                    ? `请修正以下选中内容，并给出修正后的 Markdown：\n\n${markdown}`
+                    : `请检查以下选中内容的问题（语法、表达、事实）并给出建议：\n\n${markdown}`;
+
+                await sendMessageForSession(
+                  targetSessionId,
+                  prompt,
+                  [activeTab.id],
+                  { activeFileId: activeTab.id, compactMode: 'force' }
+                );
+              }}
+              onViewportChange={({ scrollTop, scrollHeight, visibleUnit, visibleStart, visibleEnd }) => {
+                void handleViewportChange(scrollTop, scrollHeight, currentPage, {
+                  visibleUnit,
+                  visibleStart,
+                  visibleEnd,
+                });
+              }}
+            />
           )
         ) : (
           <div className="p-8">

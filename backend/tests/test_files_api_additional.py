@@ -25,6 +25,7 @@ from app.models import (
     Version,
 )
 from app.schemas import (
+    DiffEventContentUpdateRequest,
     DiffEventCreateRequest,
     DiffEventFinalizeRequest,
     DiffLineUpdateRequest,
@@ -371,6 +372,52 @@ async def test_update_content_and_diff_event_lifecycle(
         await db_session.execute(select(Version).where(Version.file_id == "file-diff").order_by(Version.timestamp.desc()))
     ).scalars().all()
     assert version_rows[0].result_snapshot == "line1\nline2\nline3"
+
+
+@pytest.mark.asyncio
+async def test_update_diff_event_content_refreshes_effective_content_in_place(
+    db_session,
+    tmp_path: Path,
+):
+    file_path = tmp_path / "note-draft.md"
+    file_path.write_text("line1\nline2", encoding="utf-8")
+
+    db_session.add(
+        File(
+            id="file-draft",
+            name="note-draft.md",
+            file_type=FileType.MD,
+            path=str(file_path),
+            size=11,
+            page_count=1,
+            meta={},
+        )
+    )
+    await db_session.commit()
+
+    created = await files_api.create_diff_event(
+        "file-draft",
+        DiffEventCreateRequest(new_content="line1\nline-x", summary="draft"),
+        db=db_session,
+    )
+
+    updated = await files_api.update_diff_event_content(
+        "file-draft",
+        created.data["event_id"],
+        DiffEventContentUpdateRequest(new_content="line1\nline-y\nline-z", summary="draft updated"),
+        db=db_session,
+    )
+
+    assert updated.success is True
+    assert updated.data["event"]["id"] == created.data["event_id"]
+    assert updated.data["event"]["old_content"] == "line1\nline2"
+    assert updated.data["event"]["new_content"] == "line1\nline-y\nline-z"
+    assert updated.data["event"]["effective_content"] == "line1\nline-y\nline-z"
+    assert len(updated.data["event"]["lines"]) == 3
+
+    pending = await files_api.get_pending_diff_event("file-draft", db=db_session)
+    assert pending.data["event"]["effective_content"] == "line1\nline-y\nline-z"
+    assert pending.data["event"]["summary"] == "draft updated"
 
 
 @pytest.mark.asyncio

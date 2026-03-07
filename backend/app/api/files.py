@@ -8,7 +8,7 @@ import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 
 from app.database import get_db
 from app.models import (
@@ -28,6 +28,7 @@ from app.models import (
 )
 from app.schemas import (
     APIResponse,
+    DiffEventContentUpdateRequest,
     DiffEventCreateRequest,
     DiffEventFinalizeRequest,
     DiffLineUpdateRequest,
@@ -201,6 +202,30 @@ async def _resolve_pending_diff_as_superseded(
     return composed_content
 
 
+async def _replace_diff_event_lines(
+    db: AsyncSession,
+    event_id: str,
+    snapshots: list[dict[str, Any]],
+) -> list[DiffLineSnapshot]:
+    await db.execute(delete(DiffLineSnapshot).where(DiffLineSnapshot.event_id == event_id))
+
+    created: list[DiffLineSnapshot] = []
+    for item in snapshots:
+        line = DiffLineSnapshot(
+            id=str(uuid.uuid4()),
+            event_id=event_id,
+            line_no=item["line_no"],
+            old_line=item["old_line"],
+            new_line=item["new_line"],
+            decision=item["decision"],
+        )
+        db.add(line)
+        created.append(line)
+
+    await db.flush()
+    return created
+
+
 async def _finalize_diff_event_record(
     db: AsyncSession,
     file: FileModel,
@@ -243,6 +268,31 @@ async def _finalize_diff_event_record(
 
     await db.commit()
     return version
+
+
+def _serialize_diff_event(event: DiffEvent, lines: list[DiffLineSnapshot]) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "file_id": event.file_id,
+        "author": event.author.value,
+        "summary": event.summary,
+        "status": event.status.value,
+        "old_content": event.old_content,
+        "new_content": event.new_content,
+        "effective_content": _compose_content_from_line_snapshots(lines),
+        "created_at": event.created_at.isoformat(),
+        "resolved_at": event.resolved_at.isoformat() if event.resolved_at else None,
+        "lines": [
+            {
+                "id": line.id,
+                "line_no": line.line_no,
+                "old_line": line.old_line,
+                "new_line": line.new_line,
+                "decision": line.decision.value,
+            }
+            for line in lines
+        ],
+    }
 
 
 def _build_unified_diff(old_content: str, new_content: str) -> str:
@@ -1119,27 +1169,49 @@ async def get_pending_diff_event(
     return APIResponse(
         success=True,
         data={
-            "event": {
-                "id": event.id,
-                "file_id": event.file_id,
-                "author": event.author.value,
-                "summary": event.summary,
-                "status": event.status.value,
-                "old_content": event.old_content,
-                "new_content": event.new_content,
-                "created_at": event.created_at.isoformat(),
-                "resolved_at": event.resolved_at.isoformat() if event.resolved_at else None,
-                "lines": [
-                    {
-                        "id": line.id,
-                        "line_no": line.line_no,
-                        "old_line": line.old_line,
-                        "new_line": line.new_line,
-                        "decision": line.decision.value,
-                    }
-                    for line in lines
-                ],
-            }
+            "event": _serialize_diff_event(event, lines),
+        },
+    )
+
+
+@router.patch("/{file_id}/diff-events/{event_id}/content", response_model=APIResponse)
+async def update_diff_event_content(
+    file_id: str,
+    event_id: str,
+    request: DiffEventContentUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update an existing pending diff event in place without finalizing it."""
+    event_result = await db.execute(
+        select(DiffEvent).where(
+            DiffEvent.id == event_id,
+            DiffEvent.file_id == file_id,
+            DiffEvent.status == DiffEventStatus.PENDING,
+        )
+    )
+    event = event_result.scalar_one_or_none()
+    if not event:
+        raise HTTPException(status_code=404, detail="Pending diff event not found")
+
+    current_lines = await _get_diff_event_lines(db, event.id)
+    current_effective_content = _compose_content_from_line_snapshots(current_lines)
+    if current_effective_content == request.new_content:
+        return APIResponse(success=True, data={"event": _serialize_diff_event(event, current_lines)})
+
+    event.new_content = request.new_content
+    if request.summary is not None:
+        event.summary = request.summary
+    event.author = request.author
+
+    snapshots = _build_diff_line_snapshots(event.old_content, request.new_content)
+    lines = await _replace_diff_event_lines(db, event.id, snapshots)
+    await db.commit()
+    await db.refresh(event)
+
+    return APIResponse(
+        success=True,
+        data={
+            "event": _serialize_diff_event(event, lines),
         },
     )
 

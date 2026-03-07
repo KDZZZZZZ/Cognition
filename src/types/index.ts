@@ -93,6 +93,7 @@ export interface DiffEventDTO {
   status: DiffEventStatus;
   old_content: string;
   new_content: string;
+  effective_content?: string;
   created_at: string;
   resolved_at?: string | null;
   lines: DiffLineDTO[];

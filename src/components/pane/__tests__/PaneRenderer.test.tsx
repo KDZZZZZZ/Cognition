@@ -36,6 +36,7 @@ const m = vi.hoisted(() => ({
   apiCreateFile: vi.fn(),
   apiGetFile: vi.fn(),
   apiUpdateDiffLineDecision: vi.fn(),
+  apiUpdateDiffEventContent: vi.fn(),
   apiFinalizeDiffEvent: vi.fn(),
 
   paneStoreState: {} as any,
@@ -152,6 +153,77 @@ vi.mock('../../editor/TiptapMarkdownEditor', () => ({
   ),
 }));
 
+vi.mock('../../editor/MarkdownDocumentEditor', () => ({
+  MarkdownDocumentEditor: ({
+    content,
+    baseContent,
+    pendingDiffEvent,
+    onChange,
+    onAddReferenceToSession,
+    onRunSelectionAction,
+    defaultSessionId,
+    sourceFile,
+  }: {
+    content?: string;
+    baseContent?: string;
+    pendingDiffEvent?: any;
+    onChange: (value: string) => void;
+    onAddReferenceToSession?: (sessionId: string, reference: any) => void;
+    onRunSelectionAction?: (params: any) => Promise<void> | void;
+    defaultSessionId?: string;
+    sourceFile?: { id: string; name: string };
+  }) => (
+    <div data-testid="markdown-document-editor">
+      <div>MarkdownDocumentEditor</div>
+      <div>{pendingDiffEvent ? 'MarkdownDocumentEditor-draft' : 'MarkdownDocumentEditor-clean'}</div>
+      <div>{content}</div>
+      <div>{baseContent}</div>
+      <button onClick={() => onChange('updated content with enough delta')}>markdown-doc-change</button>
+      <button onClick={() => onChange(content || '')}>markdown-doc-change-same</button>
+      <button
+        onClick={() =>
+          onAddReferenceToSession?.(defaultSessionId || 's-1', {
+            sourceFileId: sourceFile?.id || 'f-md',
+            sourceFileName: sourceFile?.name || 'doc.md',
+            markdown: '## selected markdown',
+            plainText: 'selected markdown',
+          })
+        }
+      >
+        markdown-doc-add-ref
+      </button>
+      <button
+        onClick={() =>
+          onRunSelectionAction?.({
+            action: 'fix',
+            targetSessionId: defaultSessionId || 's-1',
+            markdown: 'fix snippet',
+            plainText: 'fix snippet',
+            sourceFileId: sourceFile?.id || 'f-md',
+            sourceFileName: sourceFile?.name || 'doc.md',
+          })
+        }
+      >
+        markdown-doc-run-fix
+      </button>
+      <button
+        onClick={() =>
+          onRunSelectionAction?.({
+            action: 'check',
+            targetSessionId: defaultSessionId || 's-1',
+            markdown: 'check snippet',
+            plainText: 'check snippet',
+            sourceFileId: sourceFile?.id || 'f-md',
+            sourceFileName: sourceFile?.name || 'doc.md',
+          })
+        }
+      >
+        markdown-doc-run-check
+      </button>
+    </div>
+  ),
+}));
+
 vi.mock('../../editor/RawMarkdownEditor', () => ({
   RawMarkdownEditor: ({
     content,
@@ -237,6 +309,7 @@ vi.mock('../../../api/client', () => ({
     createFile: (...args: any[]) => m.apiCreateFile(...args),
     getFile: (...args: any[]) => m.apiGetFile(...args),
     updateDiffLineDecision: (...args: any[]) => m.apiUpdateDiffLineDecision(...args),
+    updateDiffEventContent: (...args: any[]) => m.apiUpdateDiffEventContent(...args),
     finalizeDiffEvent: (...args: any[]) => m.apiFinalizeDiffEvent(...args),
   },
 }));
@@ -344,10 +417,10 @@ describe('PaneRenderer', () => {
 
     await waitFor(() => {
       expect(m.getFileContent).toHaveBeenCalledWith('f-md');
-      expect(screen.getByText('editor-change')).toBeInTheDocument();
+      expect(screen.getByText('markdown-doc-change')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('editor-change'));
+    fireEvent.click(screen.getByText('markdown-doc-change'));
     await new Promise((resolve) => setTimeout(resolve, 380));
 
     await waitFor(() => {
@@ -392,10 +465,10 @@ describe('PaneRenderer', () => {
 
     await waitFor(() => {
       expect(m.getFileContent).toHaveBeenCalledWith('f-md');
-      expect(screen.getByText('editor-change-same')).toBeInTheDocument();
+      expect(screen.getByText('markdown-doc-change-same')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('editor-change-same'));
+    fireEvent.click(screen.getByText('markdown-doc-change-same'));
     await new Promise((resolve) => setTimeout(resolve, 380));
 
     expect(m.updateFileContent).not.toHaveBeenCalled();
@@ -478,7 +551,7 @@ describe('PaneRenderer', () => {
     expect(screen.getByText('SessionView-s-1')).toBeInTheDocument();
   });
 
-  it('defaults rich no-diff markdown notes to rendered preview and still allows switching back to the editor', async () => {
+  it('opens rich no-diff markdown notes in the unified document editor shell', async () => {
     m.getFileContent.mockResolvedValue('---\ntitle: Example\n---\n\n> [!NOTE] Callout body\n\n- [ ] task\n\n| Metric | Value |\n| --- | --- |\n| MMLU | 54.1 |\n\n<div>html</div>\n\nParagraph with footnote[^1].\n\n[^1]: note\n');
 
     render(
@@ -496,19 +569,12 @@ describe('PaneRenderer', () => {
       />
     );
 
-    const preview = await screen.findByTestId('markdown-preview-scroll');
-    expect(screen.getByText('title')).toBeInTheDocument();
-    expect(screen.getByText('Note')).toBeInTheDocument();
-    expect(screen.getByText('Callout body')).toBeInTheDocument();
-    expect(screen.queryByText('[!NOTE]')).not.toBeInTheDocument();
-    expect(within(preview).getByRole('checkbox')).toBeInTheDocument();
-    expect(screen.queryByText('editor-change')).not.toBeInTheDocument();
+    expect(await screen.findByTestId('markdown-document-editor')).toBeInTheDocument();
+    expect(screen.getByText('MarkdownDocumentEditor-clean')).toBeInTheDocument();
     expect(screen.queryByText('RawMarkdownEditor')).not.toBeInTheDocument();
     expect(screen.queryByText(/Raw Markdown mode to preserve/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('markdown-preview-edit'));
-    expect(await screen.findByText('editor-change')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('editor-change'));
+    fireEvent.click(screen.getByText('markdown-doc-change'));
     await new Promise((resolve) => setTimeout(resolve, 380));
 
     await waitFor(() => {
@@ -516,7 +582,7 @@ describe('PaneRenderer', () => {
     });
   });
 
-  it('returns to rendered preview after pending diff resolves for rich markdown notes', async () => {
+  it('loads rich pending diffs into the unified draft editor shell', async () => {
     m.getFileContent.mockResolvedValue('---\ntitle: Example\n---\n\n- [ ] task\n\n| Metric | Value |\n| --- | --- |\n| MMLU | 54.1 |\n\n<div>html</div>\n\nParagraph with footnote[^1].\n\n[^1]: note\n');
     m.apiGetPendingDiffEvent
       .mockResolvedValueOnce({
@@ -526,13 +592,25 @@ describe('PaneRenderer', () => {
             id: 'event-rich',
             old_content: 'old task list',
             new_content: 'new task list',
+            effective_content: 'new task list',
             summary: 'rich markdown pending',
             lines: [{ id: 'rich-line-1', line_no: 1, old_line: 'old task list', new_line: 'new task list', decision: 'pending' }],
           },
         },
-      })
-      .mockResolvedValueOnce({ success: true, data: { event: null } });
-    m.apiUpdateDiffLineDecision.mockResolvedValue({ success: true });
+      });
+    m.apiUpdateDiffEventContent.mockResolvedValue({
+      success: true,
+      data: {
+        event: {
+          id: 'event-rich',
+          old_content: 'old task list',
+          new_content: 'updated content with enough delta',
+          effective_content: 'updated content with enough delta',
+          summary: 'rich markdown pending',
+          lines: [{ id: 'rich-line-1', line_no: 1, old_line: 'old task list', new_line: 'updated content with enough delta', decision: 'pending' }],
+        },
+      },
+    });
 
     render(
       <PaneRenderer
@@ -553,14 +631,20 @@ describe('PaneRenderer', () => {
       expect(screen.getByText('rich markdown pending')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByLabelText('Accept line 1'));
+    expect(screen.getByText('MarkdownDocumentEditor-draft')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('markdown-doc-change'));
 
     await waitFor(() => {
-      expect(m.apiUpdateDiffLineDecision).toHaveBeenCalledWith('md-rich', 'event-rich', 'rich-line-1', 'accepted');
-      expect(screen.getByTestId('markdown-preview-scroll')).toBeInTheDocument();
+      expect(m.apiUpdateDiffEventContent).toHaveBeenCalledWith(
+        'md-rich',
+        'event-rich',
+        expect.objectContaining({
+          newContent: 'updated content with enough delta',
+          author: 'human',
+        })
+      );
     });
 
-    expect(screen.queryByText('editor-change')).not.toBeInTheDocument();
     expect(screen.queryByText('RawMarkdownEditor')).not.toBeInTheDocument();
     expect(screen.queryByText(/Raw Markdown mode to preserve/)).not.toBeInTheDocument();
   });
@@ -604,7 +688,7 @@ describe('PaneRenderer', () => {
       expect(m.apiFinalizeDiffEvent).toHaveBeenCalledWith(
         'f-md',
         'event-1',
-        expect.not.objectContaining({ finalContent: expect.anything() })
+        expect.objectContaining({ finalContent: 'new a' })
       );
       expect(m.setFileContentStatic).toHaveBeenCalledWith('f-md', 'final content');
       expect(m.loadFiles).toHaveBeenCalled();
@@ -731,18 +815,19 @@ describe('PaneRenderer', () => {
     expect(screen.getByText('No diff data available')).toBeInTheDocument();
   });
 
-  it('handles pending diff line actions, reject-all finalize, and markdown create fallback', async () => {
+  it('updates pending diff drafts in place, rejects all, and handles markdown create fallback', async () => {
     const pending = {
       id: 'event-2',
       old_content: 'old original',
       new_content: 'new changed',
+      effective_content: 'new changed',
       summary: 'pending review',
       lines: [
         { id: 'l1', line_no: 1, old_line: 'old original', new_line: 'new changed', decision: 'pending' },
       ],
     };
     m.apiGetPendingDiffEvent.mockResolvedValue({ success: true, data: { event: pending } });
-    m.apiUpdateDiffLineDecision.mockResolvedValue({ success: true });
+    m.apiUpdateDiffEventContent.mockResolvedValue({ success: true, data: { event: pending } });
     m.apiCreateFile.mockRejectedValueOnce(new Error('create failed'));
 
     render(
@@ -763,15 +848,15 @@ describe('PaneRenderer', () => {
     await waitFor(() => {
       expect(screen.getByText('pending review')).toBeInTheDocument();
     });
-    expect(screen.getByText('RenderedDiffViewer-inline')).toBeInTheDocument();
+    expect(screen.getByText('MarkdownDocumentEditor-draft')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByLabelText('Reject line 1'));
+    fireEvent.click(screen.getByText('markdown-doc-change'));
     await waitFor(() => {
-      expect(m.apiUpdateDiffLineDecision).toHaveBeenCalledWith('f-md', 'event-2', 'l1', 'rejected');
-    });
-    fireEvent.click(screen.getByLabelText('Accept line 1'));
-    await waitFor(() => {
-      expect(m.apiUpdateDiffLineDecision).toHaveBeenCalledWith('f-md', 'event-2', 'l1', 'accepted');
+      expect(m.apiUpdateDiffEventContent).toHaveBeenCalledWith(
+        'f-md',
+        'event-2',
+        expect.objectContaining({ newContent: 'updated content with enough delta' })
+      );
     });
 
     fireEvent.click(screen.getByText('Reject All'));
@@ -780,6 +865,7 @@ describe('PaneRenderer', () => {
         'f-md',
         'event-2',
         expect.objectContaining({
+          finalContent: 'old original',
           summary: 'Reject all pending diff lines',
         })
       );
@@ -815,10 +901,10 @@ describe('PaneRenderer', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText('editor-add-ref')).toBeInTheDocument();
+      expect(screen.getByText('markdown-doc-add-ref')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByText('editor-add-ref'));
+    fireEvent.click(screen.getByText('markdown-doc-add-ref'));
     expect(m.addSessionReference).toHaveBeenCalledWith(
       's-1',
       expect.objectContaining({
@@ -827,8 +913,8 @@ describe('PaneRenderer', () => {
       })
     );
 
-    fireEvent.click(screen.getByText('editor-run-fix'));
-    fireEvent.click(screen.getByText('editor-run-check'));
+    fireEvent.click(screen.getByText('markdown-doc-run-fix'));
+    fireEvent.click(screen.getByText('markdown-doc-run-check'));
     await waitFor(() => {
       expect(m.sendMessageForSession).toHaveBeenCalledTimes(2);
     });
@@ -931,6 +1017,7 @@ describe('PaneRenderer', () => {
           id: 'event-fallback',
           old_content: 'old-fallback',
           new_content: 'new-a\ny',
+          effective_content: 'new-a\ny',
           summary: '',
           lines: [
             { id: 'p1', line_no: 1, old_line: 'old-a', new_line: 'new-a', decision: 'pending' },
@@ -961,8 +1048,7 @@ describe('PaneRenderer', () => {
     await waitFor(() => {
       expect(screen.getByText('Pending Agent Diff')).toBeInTheDocument();
       expect(screen.getByText('2 pending lines')).toBeInTheDocument();
-      expect(screen.getByLabelText('Accept line 1')).toBeInTheDocument();
-      expect(screen.getByLabelText('Reject line 2')).toBeInTheDocument();
+      expect(screen.getByText('MarkdownDocumentEditor-draft')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText('Accept All'));
@@ -970,7 +1056,7 @@ describe('PaneRenderer', () => {
       expect(m.apiFinalizeDiffEvent).toHaveBeenCalledWith(
         'f-md',
         'event-fallback',
-        expect.not.objectContaining({ finalContent: expect.anything() })
+        expect.objectContaining({ finalContent: 'new-a\ny' })
       );
       expect(m.setFileContentStatic).toHaveBeenCalledWith('f-md', 'new-a\ny');
     });

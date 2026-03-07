@@ -14,6 +14,9 @@ const m = vi.hoisted(() => ({
   insertContent: vi.fn(),
   setContent: vi.fn(),
   focus: vi.fn(),
+  setLink: vi.fn(),
+  unsetLink: vi.fn(),
+  setTextSelection: vi.fn(),
   clipboardWriteText: vi.fn(),
 }));
 
@@ -24,6 +27,9 @@ function buildEditor() {
     m.currentMarkdown = value;
   });
   m.focus = vi.fn();
+  m.setLink = vi.fn();
+  m.unsetLink = vi.fn();
+  m.setTextSelection = vi.fn();
   return {
     storage: {
       markdown: {
@@ -49,13 +55,38 @@ function buildEditor() {
       focus: m.focus,
       insertContent: m.insertContent,
     },
-    chain: () => ({
-      focus: () => ({
-        deleteSelection: () => ({
-          run: m.deleteRun,
-        }),
-      }),
-    }),
+    chain: () => {
+      let deleteSelectionRequested = false;
+      const chain: any = {
+        focus: () => chain,
+        deleteSelection: () => {
+          deleteSelectionRequested = true;
+          return chain;
+        },
+        extendMarkRange: () => chain,
+        setLink: (attrs: any) => {
+          m.setLink(attrs);
+          return chain;
+        },
+        unsetLink: () => {
+          m.unsetLink();
+          return chain;
+        },
+        setTextSelection: (selection: any) => {
+          m.setTextSelection(selection);
+          return chain;
+        },
+        command: () => chain,
+        run: () => {
+          if (deleteSelectionRequested) {
+            m.deleteRun();
+          }
+          return true;
+        },
+      };
+      return chain;
+    },
+    getAttributes: (name: string) => (name === 'link' ? { href: 'https://example.com', title: 'Example' } : {}),
     getText: () => m.currentMarkdown,
   };
 }
@@ -75,6 +106,10 @@ vi.mock('@tiptap/starter-kit', () => ({
 
 vi.mock('@tiptap/extension-image', () => ({
   default: { configure: () => ({ name: 'image-extension' }) },
+}));
+
+vi.mock('@tiptap/extension-link', () => ({
+  default: { configure: () => ({ name: 'link-extension' }) },
 }));
 
 vi.mock('@tiptap/extension-placeholder', () => ({
@@ -139,6 +174,7 @@ describe('TiptapMarkdownEditor component', () => {
     expect(screen.getByTestId('editor-content')).toBeInTheDocument();
 
     act(() => {
+      m.lastConfig.editorProps.handleDOMEvents.keydown(null, new KeyboardEvent('keydown', { key: 'a' }));
       m.lastConfig.onUpdate({ editor: m.editor });
       m.lastConfig.onBlur();
     });
@@ -167,6 +203,48 @@ describe('TiptapMarkdownEditor component', () => {
     expect(m.deleteRun).toHaveBeenCalled();
     expect(m.lastConfig.editorProps.handlePaste(null, pasteEvent, null)).toBe(true);
     expect(m.insertContent).toHaveBeenCalled();
+  });
+
+  it('suppresses markdown echo before user editing begins', () => {
+    const onChange = vi.fn();
+    m.currentMarkdown = '| Metric | Value |';
+
+    render(<TiptapMarkdownEditor content="| Metric | Value |" onChange={onChange} />);
+
+    act(() => {
+      m.lastConfig.onUpdate({ editor: m.editor });
+    });
+    expect(onChange).not.toHaveBeenCalled();
+
+    act(() => {
+      m.lastConfig.editorProps.handleDOMEvents.keydown(null, new KeyboardEvent('keydown', { key: 'a' }));
+      m.lastConfig.onUpdate({ editor: m.editor });
+    });
+    expect(onChange).toHaveBeenCalledWith('| Metric | Value |');
+  });
+
+  it('defers external content sync while IME composition is active', async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(<TiptapMarkdownEditor content="initial markdown" onChange={onChange} />);
+
+    act(() => {
+      m.lastConfig.editorProps.handleDOMEvents.compositionstart(null, {} as any);
+      m.currentMarkdown = '你';
+      m.lastConfig.onUpdate({ editor: m.editor });
+    });
+    expect(onChange).not.toHaveBeenCalled();
+
+    rerender(<TiptapMarkdownEditor content="stale parent content" onChange={onChange} />);
+    expect(m.setContent).not.toHaveBeenCalledWith('stale parent content', { emitUpdate: false });
+
+    act(() => {
+      m.currentMarkdown = '你好';
+      m.lastConfig.editorProps.handleDOMEvents.compositionend(null, {} as any);
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith('你好');
+    });
   });
 
   it('renders context menu and temporary dialog actions', async () => {
@@ -221,6 +299,27 @@ describe('TiptapMarkdownEditor component', () => {
       );
       expect(screen.getByText(/Sent to session/)).toBeInTheDocument();
     });
+  });
+
+  it('opens the link inspector with Cmd/Ctrl+K and applies link updates', async () => {
+    render(<TiptapMarkdownEditor content="linked" />);
+
+    act(() => {
+      m.lastConfig.editorProps.handleDOMEvents.keydown(
+        null,
+        new KeyboardEvent('keydown', { key: 'k', metaKey: true })
+      );
+    });
+
+    expect(await screen.findByText('Edit Link')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), {
+      target: { value: 'https://openai.com' },
+    });
+    fireEvent.click(screen.getByText('Apply'));
+
+    expect(m.setLink).toHaveBeenCalledWith(
+      expect.objectContaining({ href: 'https://openai.com', title: 'Example' })
+    );
   });
 
   it('skips local echo content sync and applies remote updates', () => {

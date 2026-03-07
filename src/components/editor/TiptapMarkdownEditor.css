@@ -6,151 +6,98 @@
   background: var(--theme-bg);
 }
 
+.tiptap-markdown-wrapper-inline {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+
 .tiptap-markdown-editor {
   min-height: 100%;
   min-width: 100%;
   box-sizing: border-box;
-  padding: 1.5rem 1.75rem;
+  padding: 1.25rem 1.5rem 2rem;
   font-family: var(--font-body);
   font-size: 1rem;
-  line-height: 1.82;
+  line-height: 1.78;
   color: var(--theme-text);
   outline: none;
   text-wrap: pretty;
 }
 
+.tiptap-markdown-editor-inline {
+  min-height: auto;
+  min-width: 0;
+  padding: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.tiptap-markdown-editor-inline h1:first-child,
+.tiptap-markdown-editor-inline h2:first-child,
+.tiptap-markdown-editor-inline h3:first-child,
+.tiptap-markdown-editor-inline p:first-child,
+.tiptap-markdown-editor-inline ul:first-child,
+.tiptap-markdown-editor-inline ol:first-child,
+.tiptap-markdown-editor-inline blockquote:first-child,
+.tiptap-markdown-editor-inline pre:first-child {
+  margin-top: 0;
+}
+
+.tiptap-markdown-editor-inline h1:last-child,
+.tiptap-markdown-editor-inline h2:last-child,
+.tiptap-markdown-editor-inline h3:last-child,
+.tiptap-markdown-editor-inline p:last-child,
+.tiptap-markdown-editor-inline ul:last-child,
+.tiptap-markdown-editor-inline ol:last-child,
+.tiptap-markdown-editor-inline blockquote:last-child,
+.tiptap-markdown-editor-inline pre:last-child {
+  margin-bottom: 0;
+}
+
 .tiptap-markdown-editor h1,
 .tiptap-markdown-editor h2,
 .tiptap-markdown-editor h3 {
-  position: relative;
   letter-spacing: 0.02em;
+  color: var(--theme-text);
 }
 
 .tiptap-markdown-editor h1 {
   font-size: 2rem;
   font-weight: 700;
-  margin: 1.5rem 0 1rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 2px solid var(--theme-border-soft);
-}
-
-.tiptap-markdown-editor h1::before {
-  content: '#';
-  position: absolute;
-  left: -1.75rem;
-  color: var(--theme-text);
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  margin: 0.75rem 0 0.6rem;
 }
 
 .tiptap-markdown-editor h2 {
   font-size: 1.48rem;
   font-weight: 650;
-  margin: 1.25rem 0 0.75rem;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px dashed var(--theme-border-soft);
-}
-
-.tiptap-markdown-editor h2::before {
-  content: '##';
-  position: absolute;
-  left: -2.25rem;
-  color: var(--theme-text);
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  margin: 0.7rem 0 0.5rem;
 }
 
 .tiptap-markdown-editor h3 {
   font-size: 1.2rem;
   font-weight: 620;
-  margin: 1rem 0 0.5rem;
-}
-
-.tiptap-markdown-editor h3::before {
-  content: '###';
-  position: absolute;
-  left: -2.75rem;
-  color: var(--theme-text);
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.tiptap-markdown-editor h1:hover::before,
-.tiptap-markdown-editor h1:focus-within::before,
-.tiptap-markdown-editor h2:hover::before,
-.tiptap-markdown-editor h2:focus-within::before,
-.tiptap-markdown-editor h3:hover::before,
-.tiptap-markdown-editor h3:focus-within::before {
-  opacity: 0.45;
+  margin: 0.6rem 0 0.4rem;
 }
 
 .tiptap-markdown-editor p {
-  margin: 0.75rem 0;
+  margin: 0.5rem 0;
 }
 
 .tiptap-markdown-editor blockquote {
-  position: relative;
-  margin: 1rem 0;
-  padding: 0.8rem 1rem;
+  margin: 0.75rem 0;
+  padding: 0.1rem 0 0.1rem 1rem;
   border-left: 3px solid var(--theme-border-soft);
-  background: var(--theme-text);
-  background: color-mix(in srgb, var(--theme-text) 7%, transparent);
-  color: var(--theme-text);
-  font-style: italic;
-}
-
-.tiptap-markdown-editor blockquote::before {
-  content: '>';
-  position: absolute;
-  left: -1.45rem;
-  top: 0.7rem;
-  color: var(--theme-text);
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.tiptap-markdown-editor blockquote:hover::before,
-.tiptap-markdown-editor blockquote:focus-within::before {
-  opacity: 0.45;
+  color: color-mix(in srgb, var(--theme-text) 78%, transparent);
 }
 
 .tiptap-markdown-editor pre {
-  position: relative;
-  margin: 1rem 0;
-  padding: 1rem;
-  background: color-mix(in srgb, var(--theme-text) 7%, transparent);
-  border: 1px dashed var(--theme-border-soft);
-  border-radius: 0.5rem;
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  background: color-mix(in srgb, var(--theme-surface-muted) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-border-soft) 75%, transparent);
+  border-radius: 0.375rem;
   overflow-x: auto;
-}
-
-.tiptap-markdown-editor pre::before {
-  content: '```';
-  position: absolute;
-  top: -1.15rem;
-  left: 0;
-  font-size: 0.72rem;
-  color: var(--theme-text);
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.tiptap-markdown-editor pre::after {
-  content: '```';
-  position: absolute;
-  bottom: -1.15rem;
-  left: 0;
-  font-size: 0.72rem;
-  color: var(--theme-text);
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-.tiptap-markdown-editor pre:hover::before,
-.tiptap-markdown-editor pre:hover::after,
-.tiptap-markdown-editor pre:focus-within::before,
-.tiptap-markdown-editor pre:focus-within::after {
-  opacity: 0.45;
 }
 
 .tiptap-markdown-editor pre code,
@@ -166,7 +113,7 @@
 
 .tiptap-markdown-editor code {
   font-size: 0.875em;
-  background: color-mix(in srgb, var(--theme-text) 9%, transparent);
+  background: color-mix(in srgb, var(--theme-text) 8%, transparent);
   color: var(--theme-text);
   padding: 0.125rem 0.375rem;
   border-radius: 0.25rem;
@@ -174,7 +121,7 @@
 
 .tiptap-markdown-editor ul,
 .tiptap-markdown-editor ol {
-  margin: 0.75rem 0;
+  margin: 0.5rem 0;
   padding-left: 1.5rem;
 }
 
@@ -225,9 +172,9 @@
 }
 
 .tiptap-markdown-editor hr {
-  margin: 1.5rem 0;
+  margin: 1rem 0;
   border: 0;
-  border-top: 2px dashed var(--theme-border-soft);
+  border-top: 1px solid color-mix(in srgb, var(--theme-border-soft) 82%, transparent);
 }
 
 .tiptap-markdown-editor img,
@@ -236,10 +183,10 @@
   max-width: min(100%, 52rem);
   height: auto;
   margin: 1rem auto;
-  border: 1px solid var(--theme-border-soft);
+  border: 1px solid color-mix(in srgb, var(--theme-border-soft) 72%, transparent);
   border-radius: 0.75rem;
   background: color-mix(in srgb, var(--theme-surface-muted) 90%, transparent);
-  box-shadow: 0 10px 24px rgba(16, 16, 16, 0.08);
+  box-shadow: 0 6px 16px rgba(16, 16, 16, 0.06);
 }
 
 .tiptap-markdown-editor a {

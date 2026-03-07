@@ -1,6 +1,7 @@
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
+import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import { MathExtension } from '@aarkue/tiptap-math-extension';
 import { Markdown } from 'tiptap-markdown';
@@ -20,6 +21,7 @@ import {
   stripMathDelimiters,
   decodeHtmlEntities,
 } from './markdownNormalization';
+import { renderKatexToHtml } from '../ui/markdownShared';
 
 import 'katex/dist/katex.min.css';
 import './TiptapMarkdownEditor.css';
@@ -31,6 +33,7 @@ export interface TiptapMarkdownEditorProps {
   placeholder?: string;
   editable?: boolean;
   className?: string;
+  chrome?: 'document' | 'inline';
   autofocus?: boolean;
   availableSessions?: { id: string; name: string }[];
   defaultSessionId?: string;
@@ -114,6 +117,7 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       placeholder = 'Type / for commands, or start writing...',
       editable = true,
       className = '',
+      chrome = 'document',
       autofocus = false,
       availableSessions = [],
       defaultSessionId,
@@ -125,11 +129,27 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
     ref
   ) => {
     const localEchoFingerprintsRef = useRef<string[]>([]);
+    const hasUserEditedRef = useRef(false);
+    const isComposingRef = useRef(false);
+    const editorRef = useRef<Editor | null>(null);
     const wrapperRef = useRef<HTMLDivElement | null>(null);
     const [contextMenu, setContextMenu] = useState<{
       x: number;
       y: number;
       selection: EditorSelectionPayload;
+    } | null>(null);
+    const [mathInspector, setMathInspector] = useState<{
+      pos: number;
+      latex: string;
+      displayMode: boolean;
+      x: number;
+      y: number;
+    } | null>(null);
+    const [linkInspector, setLinkInspector] = useState<{
+      href: string;
+      title: string;
+      x: number;
+      y: number;
     } | null>(null);
     const [tempDialog, setTempDialog] = useState<{
       selection: EditorSelectionPayload;
@@ -204,6 +224,54 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       return localEchoFingerprintsRef.current.includes(fingerprint);
     }, []);
 
+    const emitMarkdownChange = useCallback(
+      (instance: Editor | null) => {
+        if (!instance || !hasUserEditedRef.current || isComposingRef.current) return;
+        const markdown = getMarkdown(instance);
+        rememberLocalEcho(markdown);
+        onChange?.(markdown);
+      },
+      [onChange, rememberLocalEcho]
+    );
+
+    const openLinkInspector = useCallback(
+      (instance: Editor | null, position?: { x: number; y: number }) => {
+        if (!instance) return false;
+        const { from, to } = instance.state.selection;
+        const linkAttrs = instance.getAttributes('link') as { href?: string; title?: string };
+        const hasSelection = from !== to;
+        const hasExistingLink = Boolean(linkAttrs?.href);
+        if (!hasSelection && !hasExistingLink) return false;
+
+        const selectionRect = typeof window !== 'undefined' ? window.getSelection()?.rangeCount ? window.getSelection()?.getRangeAt(0).getBoundingClientRect() : null : null;
+        const fallbackRect = wrapperRef.current?.getBoundingClientRect();
+        setLinkInspector({
+          href: linkAttrs?.href || '',
+          title: linkAttrs?.title || '',
+          x: position?.x ?? selectionRect?.left ?? fallbackRect?.left ?? 24,
+          y: position?.y ?? selectionRect?.bottom ?? fallbackRect?.top ?? 24,
+        });
+        return true;
+      },
+      []
+    );
+
+    const applyLinkInspector = useCallback(() => {
+      if (!editorRef.current || !linkInspector) return;
+      const href = linkInspector.href.trim();
+      const title = linkInspector.title.trim();
+      hasUserEditedRef.current = true;
+      const chain = editorRef.current.chain().focus().extendMarkRange('link');
+      if (!href) {
+        chain.unsetLink().run();
+      } else {
+        chain
+          .setLink(({ href, title: title || null, target: null, rel: 'noreferrer noopener' } as unknown) as any)
+          .run();
+      }
+      setLinkInspector(null);
+    }, [linkInspector]);
+
     const editor = useEditor({
       extensions: [
         // Stage 1: Schema & Rules - StarterKit 包含所有基础 inputRules
@@ -221,6 +289,15 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
           HTMLAttributes: {
             class: 'tiptap-image-node',
             loading: 'lazy',
+          },
+        }),
+        Link.configure({
+          openOnClick: false,
+          autolink: true,
+          defaultProtocol: 'https',
+          HTMLAttributes: {
+            rel: 'noreferrer noopener',
+            target: '_blank',
           },
         }),
 
@@ -275,9 +352,7 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
 
       // Stage 2: onUpdate 时输出 Markdown
       onUpdate: ({ editor }) => {
-        const markdown = getMarkdown(editor);
-        rememberLocalEcho(markdown);
-        onChange?.(markdown);
+        emitMarkdownChange(editor);
       },
 
       onBlur: () => {
@@ -287,10 +362,38 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       // Stage 3: 粘贴拦截
       editorProps: {
         attributes: {
-          class: `tiptap-markdown-editor ${className}`,
+          class: `tiptap-markdown-editor ${chrome === 'inline' ? 'tiptap-markdown-editor-inline' : ''} ${className}`.trim(),
           spellcheck: 'false',
         },
         handleDOMEvents: {
+          keydown: (_view, event): boolean => {
+            hasUserEditedRef.current = true;
+            const keyboardEvent = event as KeyboardEvent;
+            if ((keyboardEvent.metaKey || keyboardEvent.ctrlKey) && keyboardEvent.key.toLowerCase() === 'k') {
+              keyboardEvent.preventDefault();
+              return openLinkInspector(editorRef.current);
+            }
+            return false;
+          },
+          beforeinput: () => {
+            hasUserEditedRef.current = true;
+            return false;
+          },
+          compositionstart: () => {
+            hasUserEditedRef.current = true;
+            isComposingRef.current = true;
+            return false;
+          },
+          compositionend: () => {
+            isComposingRef.current = false;
+            const schedule = typeof queueMicrotask === 'function'
+              ? queueMicrotask
+              : (callback: () => void) => Promise.resolve().then(callback);
+            schedule(() => {
+              emitMarkdownChange(editorRef.current);
+            });
+            return false;
+          },
           copy: (_view, event) => {
             const e = event as ClipboardEvent;
             if (!e.clipboardData) return false;
@@ -332,6 +435,7 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
           },
         },
         handlePaste: (_view, event, _slice) => {
+          hasUserEditedRef.current = true;
           const text = event.clipboardData?.getData('text/plain');
           if (!text) return false;
 
@@ -371,18 +475,24 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       },
     }));
 
+    useEffect(() => {
+      editorRef.current = editor;
+    }, [editor]);
+
     // 当 content prop 变化时更新编辑器
     useEffect(() => {
       if (!editor) return;
       const incoming = content || '';
       const current = getMarkdown(editor);
       if (incoming === current) return;
+      if (isComposingRef.current) return;
 
       // Ignore out-of-order echoes from parent state updates to avoid
       // cursor jumps / newline rollback during fast local editing.
       if (isKnownLocalEcho(incoming)) return;
 
       editor.commands.setContent(incoming, { emitUpdate: false });
+      hasUserEditedRef.current = false;
       applyMathBridgeTransforms(editor);
     }, [editor, content, isKnownLocalEcho]);
 
@@ -438,6 +548,107 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       };
     }, [contextMenu]);
 
+    useEffect(() => {
+      if (!mathInspector) return;
+
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          setMathInspector(null);
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }, [mathInspector]);
+
+    useEffect(() => {
+      if (!linkInspector) return;
+
+      const close = () => setLinkInspector(null);
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Escape') {
+          setLinkInspector(null);
+        }
+      };
+
+      window.addEventListener('click', close);
+      window.addEventListener('keydown', handleKeyDown);
+      return () => {
+        window.removeEventListener('click', close);
+        window.removeEventListener('keydown', handleKeyDown);
+      };
+    }, [linkInspector]);
+
+    useEffect(() => {
+      if (!editor || !wrapperRef.current || !editable) return;
+
+      const wrapper = wrapperRef.current;
+      const handleClick = (event: MouseEvent) => {
+        const target = event.target as HTMLElement | null;
+        const linkElement = target?.closest('a') as HTMLElement | null;
+        if (linkElement) {
+          event.preventDefault();
+          event.stopPropagation();
+          try {
+            const startPos = editor.view.posAtDOM(linkElement.firstChild || linkElement, 0);
+            const endPos = startPos + Math.max(linkElement.textContent?.length || 1, 1);
+            editor.chain().focus().setTextSelection({ from: startPos, to: endPos }).extendMarkRange('link').run();
+          } catch {
+            // Ignore DOM -> selection mapping failures and still open the inspector.
+          }
+          setLinkInspector({
+            href: linkElement.getAttribute('href') || '',
+            title: linkElement.getAttribute('title') || '',
+            x: linkElement.getBoundingClientRect().left,
+            y: linkElement.getBoundingClientRect().bottom + 8,
+          });
+          return;
+        }
+        const mathElement = target?.closest('.tiptap-math.latex') as HTMLElement | null;
+        if (!mathElement) return;
+
+        const resolveMathNode = (initialPos: number) => {
+          const candidates = [initialPos, initialPos - 1, initialPos + 1].filter((value) => value >= 0);
+          for (const pos of candidates) {
+            const node = editor.state.doc.nodeAt(pos);
+            if (node?.type?.name === 'inlineMath') {
+              return { pos, node };
+            }
+          }
+          return null;
+        };
+
+        let initialPos: number | null = null;
+        try {
+          initialPos = editor.view.posAtDOM(mathElement, 0);
+        } catch {
+          initialPos = null;
+        }
+        if (initialPos === null) return;
+
+        const resolved = resolveMathNode(initialPos);
+        if (!resolved) return;
+
+        const rect = mathElement.getBoundingClientRect();
+        setMathInspector({
+          pos: resolved.pos,
+          latex: String(resolved.node.attrs?.latex || ''),
+          displayMode: resolved.node.attrs?.display === 'yes',
+          x: rect.left,
+          y: rect.bottom + 8,
+        });
+        event.preventDefault();
+        event.stopPropagation();
+      };
+
+      wrapper.addEventListener('click', handleClick, true);
+      return () => {
+        wrapper.removeEventListener('click', handleClick, true);
+      };
+    }, [editable, editor, openLinkInspector]);
+
     const resolvedSourceFile = sourceFile || {
       id: 'unknown-file',
       name: 'Current Document',
@@ -489,6 +700,26 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       });
       setContextMenu(null);
     }, [contextMenu, initialTargetSessionId]);
+
+    const applyMathInspectorValue = useCallback(() => {
+      if (!mathInspector || !editor) return;
+      const nextLatex = normalizeMathFormula(mathInspector.latex);
+      hasUserEditedRef.current = true;
+      editor
+        .chain()
+        .focus()
+        .command(({ tr, state }: any) => {
+          const node = state.doc.nodeAt(mathInspector.pos);
+          if (!node) return false;
+          tr.setNodeMarkup(mathInspector.pos, undefined, {
+            ...node.attrs,
+            latex: nextLatex,
+          });
+          return true;
+        })
+        .run();
+      setMathInspector(null);
+    }, [editor, mathInspector]);
 
     const runTempDialogAction = useCallback(
       async (action: 'fix' | 'check') => {
@@ -557,7 +788,10 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
     }
 
     return (
-      <div ref={wrapperRef} className="tiptap-markdown-wrapper relative">
+      <div
+        ref={wrapperRef}
+        className={`tiptap-markdown-wrapper ${chrome === 'inline' ? 'tiptap-markdown-wrapper-inline' : ''} relative`}
+      >
         <EditorContent editor={editor} />
 
         {contextMenu && (
@@ -699,6 +933,160 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
                     Fix Selection
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {linkInspector && (
+          <div
+            className="fixed z-[94] w-[min(92vw,420px)] rounded-xl border border-theme-border/30 bg-theme-bg shadow-[0_16px_40px_rgba(0,0,0,0.22)]"
+            style={{
+              left: Math.max(16, Math.min(linkInspector.x, window.innerWidth - 440)),
+              top: Math.max(16, Math.min(linkInspector.y, window.innerHeight - 240)),
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-theme-border/20 px-4 py-2 text-xs font-semibold text-theme-text/72">
+              Edit Link
+            </div>
+            <div className="space-y-3 px-4 py-3">
+              <input
+                autoFocus
+                value={linkInspector.href}
+                placeholder="https://example.com"
+                onChange={(event) =>
+                  setLinkInspector((current) =>
+                    current
+                      ? {
+                          ...current,
+                          href: event.target.value,
+                        }
+                      : current
+                  )
+                }
+                onKeyDown={(event) => {
+                  if ((event.nativeEvent as KeyboardEvent).isComposing) return;
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    applyLinkInspector();
+                  }
+                }}
+                className="w-full rounded-md border border-theme-border/22 bg-theme-bg px-3 py-2 text-sm outline-none"
+              />
+              <input
+                value={linkInspector.title}
+                placeholder="Title (optional)"
+                onChange={(event) =>
+                  setLinkInspector((current) =>
+                    current
+                      ? {
+                          ...current,
+                          title: event.target.value,
+                        }
+                      : current
+                  )
+                }
+                onKeyDown={(event) => {
+                  if ((event.nativeEvent as KeyboardEvent).isComposing) return;
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    applyLinkInspector();
+                  }
+                }}
+                className="w-full rounded-md border border-theme-border/22 bg-theme-bg px-3 py-2 text-sm outline-none"
+              />
+              <div className="text-[11px] text-theme-text/46">
+                Leave the URL empty to remove the link.
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-2 border-t border-theme-border/20 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setLinkInspector(null)}
+                className="rounded border border-theme-border/25 px-3 py-1.5 text-xs hover:bg-theme-text/8"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={applyLinkInspector}
+                className="rounded border border-theme-border/25 px-3 py-1.5 text-xs hover:bg-theme-text/8"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        )}
+
+        {mathInspector && (
+          <div
+            className="fixed z-[95] w-[min(92vw,480px)] rounded-xl border border-theme-border/30 bg-theme-bg shadow-[0_16px_40px_rgba(0,0,0,0.22)]"
+            style={{
+              left: Math.max(16, Math.min(mathInspector.x, window.innerWidth - 500)),
+              top: Math.max(16, Math.min(mathInspector.y, window.innerHeight - 320)),
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-theme-border/20 px-4 py-2 text-xs font-semibold text-theme-text/72">
+              {mathInspector.displayMode ? 'Edit Formula Block' : 'Edit Inline Formula'}
+            </div>
+            <div className="space-y-3 px-4 py-3">
+              <textarea
+                autoFocus
+                value={mathInspector.latex}
+                onChange={(event) =>
+                  setMathInspector((current) =>
+                    current
+                      ? {
+                          ...current,
+                          latex: event.target.value,
+                        }
+                      : current
+                  )
+                }
+                onKeyDown={(event) => {
+                  if ((event.nativeEvent as KeyboardEvent).isComposing) return;
+                  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey || !mathInspector.displayMode)) {
+                    event.preventDefault();
+                    applyMathInspectorValue();
+                  }
+                }}
+                className={`w-full rounded border border-theme-border/22 bg-theme-bg px-3 py-2 font-mono text-[13px] leading-6 outline-none ${mathInspector.displayMode ? 'min-h-[140px]' : 'min-h-[80px]'}`}
+              />
+              <div className="rounded-lg border border-theme-border/18 bg-theme-surface/10 px-3 py-3">
+                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-theme-text/42">Preview</div>
+                {renderKatexToHtml(mathInspector.latex, mathInspector.displayMode) ? (
+                  <div
+                    className="overflow-x-auto text-theme-text"
+                    dangerouslySetInnerHTML={{
+                      __html: renderKatexToHtml(mathInspector.latex, mathInspector.displayMode) || '',
+                    }}
+                  />
+                ) : (
+                  <div className="text-sm text-red-600">{mathInspector.latex}</div>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center justify-between gap-2 border-t border-theme-border/20 px-4 py-3">
+              <div className="text-[11px] text-theme-text/48">
+                {mathInspector.displayMode ? 'Use Ctrl/Cmd+Enter to apply quickly.' : 'Press Enter to apply quickly.'}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMathInspector(null)}
+                  className="rounded border border-theme-border/25 px-3 py-1.5 text-xs hover:bg-theme-text/8"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={applyMathInspectorValue}
+                  className="rounded border border-theme-border/25 px-3 py-1.5 text-xs hover:bg-theme-text/8"
+                >
+                  Apply
+                </button>
               </div>
             </div>
           </div>
