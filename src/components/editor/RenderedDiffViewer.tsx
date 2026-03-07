@@ -1,8 +1,9 @@
 import { useMemo } from 'react';
+import { diffArrays, diffChars } from 'diff';
 import { Check, X } from 'lucide-react';
 import { MarkdownContent } from '../ui/MarkdownContent';
 import type { DiffLineDTO } from '../../types';
-import { buildRowsFromContents, buildRowsFromPendingLines, type DiffCharSegment, type DiffRenderRow } from './diffRows';
+import { buildRowsFromContents, buildRowsFromPendingLines, type DiffRenderRow } from './diffRows';
 import { normalizeCopiedSelectionMarkdown } from './markdownNormalization';
 
 interface RenderedDiffViewerProps {
@@ -15,52 +16,136 @@ interface RenderedDiffViewerProps {
   onApplyLineDecision?: (lineId: string, decision: 'accepted' | 'rejected') => void;
 }
 
-function collectChangedPreviewContent(rows: DiffRenderRow[], side: 'old' | 'new') {
-  const lines = rows
-    .map((row) => (side === 'old' ? row.oldText : row.newText))
-    .filter((line): line is string => Boolean(line && line.trim().length > 0));
+function longestRun(value: string, marker: string) {
+  let longest = 0;
+  let current = 0;
 
-  return lines.join('\n');
-}
-
-function renderLinePlaceholder(status: 'old' | 'new') {
-  return (
-    <span className={`select-none ${status === 'old' ? 'text-rose-700/28' : 'text-emerald-700/30'}`}>·</span>
-  );
-}
-
-function renderSegments(segments: DiffCharSegment[], status: 'old' | 'new') {
-  if (segments.length === 0) {
-    return renderLinePlaceholder(status);
+  for (const char of value) {
+    if (char === marker) {
+      current += 1;
+      longest = Math.max(longest, current);
+    } else {
+      current = 0;
+    }
   }
 
-  const hasVisibleText = segments.some((segment) => segment.text.length > 0);
-  if (!hasVisibleText) {
-    return <span className="text-theme-text/35"> </span>;
+  return longest;
+}
+
+function wrapInsertedSegment(text: string) {
+  if (!text) return '';
+
+  const fence = '`'.repeat(Math.max(1, longestRun(text, '`') + 1));
+  const needsPadding = text.startsWith('`') || text.endsWith('`');
+  const inner = needsPadding ? ` ${text} ` : text;
+  return `${fence}${inner}${fence}`;
+}
+
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function wrapRemovedSegment(text: string) {
+  if (!text) return '';
+  return `<del>${escapeHtml(text)}</del>`;
+}
+
+const MATH_TOKEN_PATTERN = /\$\$[\s\S]*?\$\$|(?<!\$)\$[^$\n]+?\$/g;
+
+function tokenizeDiffMarkdown(text: string) {
+  const tokens: string[] = [];
+  let lastIndex = 0;
+
+  for (const match of text.matchAll(MATH_TOKEN_PATTERN)) {
+    const start = match.index ?? 0;
+    if (start > lastIndex) {
+      tokens.push(text.slice(lastIndex, start));
+    }
+    tokens.push(match[0]);
+    lastIndex = start + match[0].length;
   }
 
-  return segments.map((segment, index) => {
-    const toneClass = segment.added
-      ? 'text-theme-text'
-      : segment.removed
-        ? 'text-theme-text line-through decoration-rose-700/75'
-        : 'text-theme-text/72';
-    const toneStyle = segment.added
-      ? { backgroundColor: 'rgba(16, 185, 129, 0.28)' }
-      : segment.removed
-        ? { backgroundColor: 'rgba(244, 63, 94, 0.24)' }
-        : undefined;
+  if (lastIndex < text.length) {
+    tokens.push(text.slice(lastIndex));
+  }
 
-    return (
-      <span
-        key={`${status}-${index}-${segment.text}`}
-        className={`rounded-[2px] px-[1px] ${toneClass}`}
-        style={toneStyle}
-      >
-        {segment.text}
-      </span>
-    );
-  });
+  return tokens.filter((token) => token.length > 0);
+}
+
+function isMathToken(token: string) {
+  return /^(\$\$[\s\S]*\$\$|(?<!\$)\$[^$\n]+?\$)$/.test(token);
+}
+
+function mergeTextTokenDiff(oldToken: string, newToken: string) {
+  return diffChars(oldToken, newToken)
+    .map((part) => {
+      if (part.added) return wrapInsertedSegment(part.value);
+      if (part.removed) return wrapRemovedSegment(part.value);
+      return part.value;
+    })
+    .join('');
+}
+
+function buildMergedMarkdown(oldText: string | null, newText: string | null) {
+  if (oldText === null && newText === null) return '';
+  if (oldText === null) return wrapInsertedSegment(newText || '');
+  if (newText === null) return wrapRemovedSegment(oldText);
+
+  const oldTokens = tokenizeDiffMarkdown(oldText);
+  const newTokens = tokenizeDiffMarkdown(newText);
+  const tokenParts = diffArrays(oldTokens, newTokens);
+  let merged = '';
+
+  for (let index = 0; index < tokenParts.length; index += 1) {
+    const part = tokenParts[index];
+
+    if (!part.added && !part.removed) {
+      merged += part.value.join('');
+      continue;
+    }
+
+    if (part.removed && index + 1 < tokenParts.length && tokenParts[index + 1].added) {
+      const removedTokens = part.value;
+      const addedTokens = tokenParts[index + 1].value;
+      const shared = Math.min(removedTokens.length, addedTokens.length);
+
+      for (let offset = 0; offset < shared; offset += 1) {
+        const removedToken = removedTokens[offset];
+        const addedToken = addedTokens[offset];
+
+        if (!isMathToken(removedToken) && !isMathToken(addedToken)) {
+          merged += mergeTextTokenDiff(removedToken, addedToken);
+        } else {
+          merged += wrapRemovedSegment(removedToken);
+          merged += wrapInsertedSegment(addedToken);
+        }
+      }
+
+      for (const removedToken of removedTokens.slice(shared)) {
+        merged += wrapRemovedSegment(removedToken);
+      }
+      for (const addedToken of addedTokens.slice(shared)) {
+        merged += wrapInsertedSegment(addedToken);
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (part.removed) {
+      merged += part.value.map((token) => wrapRemovedSegment(token)).join('');
+      continue;
+    }
+
+    if (part.added) {
+      merged += part.value.map((token) => wrapInsertedSegment(token)).join('');
+    }
+  }
+
+  return merged;
 }
 
 function rowTone(row: DiffRenderRow) {
@@ -70,59 +155,6 @@ function rowTone(row: DiffRenderRow) {
   if (row.status === 'remove') return 'bg-rose-500/55';
   if (row.status === 'modify') return 'bg-amber-500/60';
   return 'bg-theme-text/14';
-}
-
-function RowCell({
-  lineNumber,
-  segments,
-  status,
-}: {
-  lineNumber: number | null;
-  segments: DiffCharSegment[];
-  status: 'old' | 'new';
-}) {
-  return (
-    <pre className="m-0 grid min-w-0 grid-cols-[1.35rem_minmax(0,1fr)] items-start gap-1.5 overflow-x-auto overflow-y-hidden whitespace-pre font-mono text-[9px] leading-3 text-theme-text/58">
-      <span className="select-none text-[8px] text-theme-text/22">
-        {lineNumber === null ? '' : lineNumber}
-      </span>
-      <span className="min-w-0 pb-px">{renderSegments(segments, status)}</span>
-    </pre>
-  );
-}
-
-function RowMarkdownPreview({
-  text,
-}: {
-  text: string | null;
-}) {
-  if (!text || !text.trim()) return null;
-
-  return (
-    <div className="min-w-0 px-0.5 py-0.5">
-      <MarkdownContent
-        content={text}
-        className="prose-xs leading-5 [&_.katex-display]:my-0.5 [&_blockquote]:my-0 [&_h1]:my-0 [&_h2]:my-0 [&_h3]:my-0 [&_li]:my-0.5 [&_ol]:my-0 [&_p]:my-0 [&_pre]:my-0 [&_ul]:my-0"
-      />
-    </div>
-  );
-}
-
-function PreviewCard({
-  content,
-  className,
-}: {
-  content: string;
-  className?: string;
-}) {
-  return (
-    <div className="block w-full rounded-lg border border-theme-border/12 bg-theme-bg/82 px-3 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-      <MarkdownContent
-        content={content}
-        className={className}
-      />
-    </div>
-  );
 }
 
 function ActionRail({
@@ -181,11 +213,12 @@ function ReviewRow({
   onSelectLine?: (lineId: string) => void;
   onApplyLineDecision?: (lineId: string, decision: 'accepted' | 'rejected') => void;
 }) {
-  const showMarkdownPreview = Boolean((row.oldText && row.oldText.trim()) || (row.newText && row.newText.trim()));
+  const mergedMarkdown = useMemo(() => buildMergedMarkdown(row.oldText, row.newText), [row.newText, row.oldText]);
+  const lineNumber = row.newLineNumber ?? row.oldLineNumber ?? row.reviewLineNumber;
 
   return (
     <div
-      className={`group grid grid-cols-[18px_minmax(0,1fr)_minmax(0,1fr)] items-start gap-2 rounded-lg border px-1.5 py-1 transition-colors ${
+      className={`group grid grid-cols-[18px_minmax(0,1fr)] items-start gap-2 rounded-lg border px-1.5 py-1 transition-colors ${
         selected
           ? 'border-theme-border/26 bg-theme-text/[0.045]'
           : 'border-theme-border/10 bg-theme-surface/28'
@@ -198,16 +231,20 @@ function ReviewRow({
         <ActionRail row={row} actionable={actionable} onApplyLineDecision={onApplyLineDecision} />
       </div>
 
-      <div className="min-w-0 rounded-md border border-theme-border/10 bg-theme-bg/78 px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-        {showMarkdownPreview ? <RowMarkdownPreview text={row.oldText} /> : null}
-        <div className={showMarkdownPreview ? 'mt-1 border-t border-theme-border/8 pt-1 opacity-60 transition-opacity group-hover:opacity-90' : ''}>
-          <RowCell lineNumber={row.oldLineNumber} segments={row.oldSegments} status="old" />
-        </div>
-      </div>
-      <div className="min-w-0 rounded-md border border-theme-border/10 bg-theme-bg/78 px-2 py-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-        {showMarkdownPreview ? <RowMarkdownPreview text={row.newText} /> : null}
-        <div className={showMarkdownPreview ? 'mt-1 border-t border-theme-border/8 pt-1 opacity-60 transition-opacity group-hover:opacity-90' : ''}>
-          <RowCell lineNumber={row.newLineNumber} segments={row.newSegments} status="new" />
+      <div className="min-w-0 rounded-md border border-theme-border/10 bg-theme-bg/78 px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+        <div className="grid grid-cols-[1.75rem_minmax(0,1fr)] items-start gap-2">
+          <span className="select-none pt-0.5 text-[10px] leading-5 text-theme-text/26">{lineNumber}</span>
+          <div data-testid="diff-merged-markdown" className="min-w-0">
+            {mergedMarkdown ? (
+              <MarkdownContent
+                content={mergedMarkdown}
+                variant="diff"
+                className="prose-xs leading-6 [&_.katex-display]:my-0.5 [&_blockquote]:my-0 [&_code]:whitespace-break-spaces [&_h1]:my-0 [&_h2]:my-0 [&_h3]:my-0 [&_li]:my-0.5 [&_ol]:my-0 [&_p]:my-0 [&_pre]:my-0 [&_ul]:my-0"
+              />
+            ) : (
+              <span className="block h-5 rounded-sm bg-theme-text/5" />
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -217,7 +254,6 @@ function ReviewRow({
 export function RenderedDiffViewer({
   oldContent,
   newContent,
-  mode = 'inline',
   pendingLines = [],
   selectedLineId = null,
   onSelectLine,
@@ -244,68 +280,11 @@ export function RenderedDiffViewer({
   );
 
   const changedRows = useMemo(() => rows.filter((row) => row.status !== 'equal'), [rows]);
-  const changedOldPreviewContent = useMemo(() => collectChangedPreviewContent(changedRows, 'old'), [changedRows]);
-  const changedNewPreviewContent = useMemo(() => collectChangedPreviewContent(changedRows, 'new'), [changedRows]);
-  const oldPreviewContent = useMemo(
-    () => changedOldPreviewContent || normalizedOldContent,
-    [changedOldPreviewContent, normalizedOldContent]
-  );
-  const newPreviewContent = useMemo(
-    () => changedNewPreviewContent || normalizedNewContent,
-    [changedNewPreviewContent, normalizedNewContent]
-  );
-  const compactLayout = changedRows.length <= 2 && Math.max(oldPreviewContent.length, newPreviewContent.length) <= 240;
-  const showDocumentPreview = !compactLayout;
 
   return (
-    <div className={`flex w-full flex-col bg-theme-bg text-sm ${compactLayout ? 'overflow-auto' : 'h-full overflow-hidden'}`}>
-      {showDocumentPreview ? (
-        <div
-          className={`border-b border-theme-border/18 min-h-0 flex-[0_0_46%] overflow-hidden ${
-            mode === 'split' ? 'grid grid-cols-2 divide-x divide-theme-border/16' : ''
-          }`}
-        >
-          {mode === 'split' ? (
-            <>
-              <div className="min-h-0 overflow-auto bg-theme-surface/45 px-3 py-2">
-                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
-                  Rendered Original
-                </div>
-                <PreviewCard
-                  content={oldPreviewContent}
-                  className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
-                />
-              </div>
-              <div className="min-h-0 overflow-auto bg-theme-surface/45 px-3 py-2">
-                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
-                  Rendered Modified
-                </div>
-                <PreviewCard
-                  content={newPreviewContent}
-                  className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
-                />
-              </div>
-            </>
-          ) : (
-            <div className="min-h-0 overflow-auto bg-theme-surface/45 px-3 py-2">
-              <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-theme-text/46">
-                Rendered Proposal
-              </div>
-              <PreviewCard
-                content={newPreviewContent}
-                className="[&_blockquote]:my-1 [&_h1]:my-1 [&_h2]:my-1 [&_h3]:my-1 [&_ol]:my-1 [&_p]:my-1 [&_pre]:my-1 [&_ul]:my-1"
-              />
-            </div>
-          )}
-        </div>
-      ) : null}
-
-      <div
-        className={`bg-theme-surface/16 px-2 py-1.5 ${
-          compactLayout ? 'shrink-0' : 'min-h-0 flex-1 overflow-hidden'
-        }`}
-      >
-        <div className={`flex w-full flex-col ${compactLayout ? 'gap-2' : 'h-full gap-1.5 overflow-auto pr-1'}`}>
+    <div className="flex h-full w-full flex-col bg-theme-bg text-sm">
+      <div className="min-h-0 flex-1 overflow-auto bg-theme-surface/16 px-2 py-1.5">
+        <div className="flex w-full flex-col gap-1.5 pr-1">
           {changedRows.length === 0 ? (
             <div className="rounded-xl border border-theme-border/14 bg-theme-surface/70 px-4 py-6 text-center text-theme-text/48">
               No line changes to review.

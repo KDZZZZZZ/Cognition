@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RenderedDiffViewer } from '../RenderedDiffViewer';
 
 describe('RenderedDiffViewer', () => {
-  it('renders rendered proposal preview and line-level actions for pending diff rows', () => {
+  it('renders merged markdown diff rows with line-level actions for pending changes', () => {
     const onApplyLineDecision = vi.fn();
 
     const { container } = render(
@@ -37,20 +37,20 @@ describe('RenderedDiffViewer', () => {
     expect(screen.queryByText(/^Added$/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Accept line 2')).toBeInTheDocument();
     expect(screen.getByLabelText('Reject line 3')).toBeInTheDocument();
-    expect(screen.getAllByText((_, element) => element?.textContent?.includes('new paragraph with code') ?? false).length).toBeGreaterThan(0);
-    expect(document.querySelector('.katex')).not.toBeNull();
+    expect(container.querySelectorAll('[data-testid="diff-merged-markdown"]').length).toBe(2);
+    expect(container.querySelector('pre')).toBeNull();
+    expect(container.querySelectorAll('code').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('del').length).toBeGreaterThan(0);
+    expect(container.textContent).toContain('new');
+    expect(container.textContent).toContain('paragraph');
+    expect(container.textContent).toContain('$$x+y$$');
 
     fireEvent.click(screen.getByLabelText('Accept line 2'));
     expect(onApplyLineDecision).toHaveBeenCalledWith('line-2', 'accepted');
-
-    const highlightedChar = Array.from(container.querySelectorAll('pre span')).find((element) =>
-      element.getAttribute('style')?.includes('background-color')
-    );
-    expect(highlightedChar).not.toBeUndefined();
   });
 
-  it('renders split mode preview with old and new content plus changed lines only', () => {
-    render(
+  it('renders split mode as a single merged markdown review stream', () => {
+    const { container } = render(
       <RenderedDiffViewer
         oldContent={'line A\nline B'}
         newContent={'line A\nline C\nline D'}
@@ -62,13 +62,15 @@ describe('RenderedDiffViewer', () => {
     expect(screen.queryByText('Rendered Modified')).not.toBeInTheDocument();
     expect(screen.queryByText(/^Modified$/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Added$/)).not.toBeInTheDocument();
-    expect(screen.getAllByText((_, element) => element?.textContent === 'line B').length).toBeGreaterThan(0);
-    expect(screen.getAllByText((_, element) => element?.textContent?.includes('line C') ?? false).length).toBeGreaterThan(0);
-    expect(screen.getAllByText((_, element) => element?.textContent === 'line D').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('[data-testid="diff-merged-markdown"]').length).toBe(2);
+    expect(container.querySelector('pre')).toBeNull();
+    expect(Array.from(container.querySelectorAll('del')).some((element) => element.textContent === 'B')).toBe(true);
+    expect(Array.from(container.querySelectorAll('code')).some((element) => element.textContent === 'C')).toBe(true);
+    expect(Array.from(container.querySelectorAll('code')).some((element) => element.textContent === 'line D')).toBe(true);
   });
 
-  it('normalizes serialized math html before rendering diff previews and rows', () => {
-    render(
+  it('normalizes serialized math html before rendering merged diff markdown', () => {
+    const { container } = render(
       <RenderedDiffViewer
         oldContent={'Before <span data-type="inlineMath" data-latex="a+b" /> text'}
         newContent={'After <span data-type="inlineMath" data-latex="c+d" /> text'}
@@ -85,9 +87,11 @@ describe('RenderedDiffViewer', () => {
       />
     );
 
-    expect(document.querySelectorAll('.katex').length).toBeGreaterThan(0);
-    expect(screen.queryByText(/data-type="inlineMath"/)).not.toBeInTheDocument();
-    expect(screen.getByText((_, element) => element?.textContent === 'Before $a+b$ text')).toBeInTheDocument();
-    expect(screen.getByText((_, element) => element?.textContent === 'After $c+d$ text')).toBeInTheDocument();
+    expect(container.innerHTML).not.toContain('data-type="inlineMath"');
+    expect(container.querySelectorAll('[data-testid="diff-merged-markdown"]').length).toBe(1);
+    expect(container.querySelectorAll('code').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('del').length).toBeGreaterThan(0);
+    expect(container.textContent).toContain('c');
+    expect(container.textContent).toContain('d');
   });
 });
