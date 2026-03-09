@@ -8,6 +8,7 @@ const createPane = vi.fn();
 const openTab = vi.fn();
 const setUiActivePane = vi.fn();
 const setPaneStoreActivePane = vi.fn();
+const setModel = vi.fn();
 
 const uiState = {
   sidebarOpen: true,
@@ -36,6 +37,11 @@ vi.mock('../stores/apiStore', () => ({
   useFileStore: () => ({ loadFiles }),
 }));
 
+vi.mock('../stores/chatStore', () => ({
+  useChatStore: (selector: (state: { setModel: typeof setModel }) => unknown) =>
+    selector({ setModel }),
+}));
+
 vi.mock('../components/layout/Sidebar', () => ({
   Sidebar: () => <div>SidebarMock</div>,
 }));
@@ -62,7 +68,7 @@ describe('App', () => {
     render(<App />);
     expect(loadFiles).toHaveBeenCalled();
 
-    fireEvent.click(screen.getByText('New Pane'));
+    fireEvent.click(screen.getByTitle('拆分视图'));
     expect(createPane).toHaveBeenCalled();
   });
 
@@ -102,8 +108,21 @@ describe('App', () => {
 
   it('toggles sidebar from toolbar button', () => {
     render(<App />);
-    fireEvent.click(screen.getAllByRole('button')[0]);
+    fireEvent.click(screen.getByTitle('侧边栏'));
     expect(toggleSidebar).toHaveBeenCalled();
+  });
+
+  it('opens runtime settings and saves model config', () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByTitle('接口与模型'));
+    expect(screen.getByTestId('runtime-settings-dialog')).toBeInTheDocument();
+
+    const modelInputs = screen.getAllByPlaceholderText(/gpt-4o \/ kimi \/ deepseek-chat|DeepSeek-OCR|text-embedding-3-large/);
+    fireEvent.change(modelInputs[0], { target: { value: 'kimi-latest' } });
+    fireEvent.click(screen.getByText('保存'));
+
+    expect(setModel).toHaveBeenCalledWith('kimi-latest');
   });
 
   it('opens dropped file tabs and ignores folder/invalid payloads', () => {

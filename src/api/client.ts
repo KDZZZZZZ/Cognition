@@ -2,10 +2,9 @@
  * API Client for Knowledge IDE Backend
  */
 
-import { runtimeConfig } from '../config/runtime';
+import { getApiBaseUrl, getDefaultChatModel, getRuntimeRequestHeaders } from '../config/runtime';
 
-const API_BASE = runtimeConfig.apiBaseUrl;
-const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'Pro/MiniMaxAI/MiniMax-M2.5';
+const API_BASE = getApiBaseUrl();
 
 export const BASE_URL = API_BASE;
 
@@ -203,6 +202,17 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
+  private getBaseUrl(): string {
+    return getApiBaseUrl() || this.baseUrl;
+  }
+
+  private getHeaders(extraHeaders?: Record<string, string>): Record<string, string> {
+    return {
+      ...getRuntimeRequestHeaders(),
+      ...(extraHeaders || {}),
+    };
+  }
+
   private normalizeApiResponse<T>(payload: unknown, ok: boolean, response: Pick<Response, 'status' | 'statusText'>): ApiResponse<T> {
     if (payload && typeof payload === 'object' && 'success' in payload) {
       return payload as ApiResponse<T>;
@@ -241,14 +251,16 @@ class ApiClient {
   }
 
   async get(endpoint: string): Promise<ApiResponse> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`);
+    const response = await fetch(`${this.getBaseUrl()}${endpoint}`, {
+      headers: this.getHeaders(),
+    });
     return this.parseResponse(response);
   }
 
   async post(endpoint: string, body?: any, init?: RequestInit): Promise<ApiResponse> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const response = await fetch(`${this.getBaseUrl()}${endpoint}`, {
       method: 'POST',
-      headers: body instanceof FormData ? {} : { 'Content-Type': 'application/json' },
+      headers: body instanceof FormData ? this.getHeaders() : this.getHeaders({ 'Content-Type': 'application/json' }),
       body: body instanceof FormData ? body : JSON.stringify(body),
       signal: init?.signal,
     });
@@ -256,25 +268,28 @@ class ApiClient {
   }
 
   async put(endpoint: string, body: any): Promise<ApiResponse> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const response = await fetch(`${this.getBaseUrl()}${endpoint}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     return this.parseResponse(response);
   }
 
   async patch(endpoint: string, body: any): Promise<ApiResponse> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    const response = await fetch(`${this.getBaseUrl()}${endpoint}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
     });
     return this.parseResponse(response);
   }
 
   async delete(endpoint: string): Promise<ApiResponse> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, { method: 'DELETE' });
+    const response = await fetch(`${this.getBaseUrl()}${endpoint}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
     return this.parseResponse(response);
   }
 
@@ -310,8 +325,10 @@ class ApiClient {
 
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', `${this.baseUrl}/api/v1/files/upload${query}`);
+      xhr.open('POST', `${this.getBaseUrl()}/api/v1/files/upload${query}`);
       xhr.responseType = 'text';
+      const headers = this.getHeaders();
+      Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
 
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
@@ -393,7 +410,9 @@ class ApiClient {
   }
 
   async downloadFile(fileId: string): Promise<Blob> {
-    const response = await fetch(`${this.baseUrl}/api/v1/files/${fileId}/download`);
+    const response = await fetch(`${this.getBaseUrl()}/api/v1/files/${fileId}/download`, {
+      headers: this.getHeaders(),
+    });
     return response.blob();
   }
 
@@ -498,7 +517,7 @@ class ApiClient {
     sessionId: string,
     message: string,
     contextFiles: string[] = [],
-    model = DEFAULT_CHAT_MODEL,
+    model = getDefaultChatModel(),
     useTools = true,
     options?: ChatCompletionOptions
   ): Promise<ApiResponse> {
@@ -577,7 +596,7 @@ class ApiClient {
   async updatePermissions(sessionId: string, fileId: string, permission: 'read' | 'write' | 'none'): Promise<ApiResponse> {
     const response = await fetch(
       `${this.baseUrl}/api/v1/chat/sessions/${sessionId}/permissions?file_id=${fileId}&permission=${permission}`,
-      { method: 'POST' }
+      { method: 'POST', headers: this.getHeaders() }
     );
     return response.json();
   }

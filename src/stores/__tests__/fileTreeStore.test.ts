@@ -46,6 +46,7 @@ describe('useFileTreeStore', () => {
     useFileTreeStore.setState({
       fileTree: [],
       localSessions: [],
+      sessionLocations: {},
       loading: false,
     });
   });
@@ -58,6 +59,7 @@ describe('useFileTreeStore', () => {
     useFileTreeStore.setState({
       fileTree: [],
       localSessions: [{ id: 'local-s1', name: 'Local Session', type: 'session' }],
+      sessionLocations: { 'local-s1': 'folder-a' },
       loading: false,
     });
 
@@ -79,6 +81,34 @@ describe('useFileTreeStore', () => {
     expect(tree.some((node) => node.id === 'f1')).toBe(true);
     expect(tree.some((node) => node.id === 'remote-s1')).toBe(true);
     expect(tree.some((node) => node.id === 'local-s1')).toBe(true);
+  });
+
+  it('places sessions inside folders and normalizes missing parents back to root', async () => {
+    useFileTreeStore.setState({
+      fileTree: [],
+      localSessions: [{ id: 'local-s1', name: 'Local Session', type: 'session' }],
+      sessionLocations: { 'local-s1': 'folder-1' },
+      loading: false,
+    });
+
+    mockApi.listFiles.mockResolvedValueOnce({
+      success: true,
+      data: {
+        files: [{ id: 'folder-1', name: 'Docs', type: 'folder', children: [] }],
+      },
+    });
+    mockApi.listSessions.mockResolvedValueOnce({ success: true, data: { sessions: [] } });
+
+    await useFileTreeStore.getState().loadFilesFromBackend();
+    let folder = useFileTreeStore.getState().findFile('folder-1');
+    expect(folder?.children?.some((child) => child.id === 'local-s1')).toBe(true);
+
+    mockApi.listFiles.mockResolvedValueOnce({ success: true, data: { files: [] } });
+    mockApi.listSessions.mockResolvedValueOnce({ success: true, data: { sessions: [] } });
+
+    await useFileTreeStore.getState().loadFilesFromBackend();
+    expect(useFileTreeStore.getState().fileTree.some((node) => node.id === 'local-s1')).toBe(true);
+    expect(useFileTreeStore.getState().sessionLocations['local-s1']).toBeNull();
   });
 
   it('toggles folders and finds nodes', () => {
@@ -107,18 +137,26 @@ describe('useFileTreeStore', () => {
       success: true,
       data: { id: 'uuid-1', name: 'S' },
     });
-    const id = await useFileTreeStore.getState().createFile('S', 'session');
+    useFileTreeStore.setState({
+      fileTree: [{ id: 'folder-1', name: 'Folder', type: 'folder', isOpen: true, children: [] }],
+      localSessions: [],
+      sessionLocations: {},
+      loading: false,
+    });
+    const id = await useFileTreeStore.getState().createFile('S', 'session', 'folder-1');
     expect(id).toBe('uuid-1');
-    expect(useFileTreeStore.getState().fileTree.some((n) => n.id === 'uuid-1')).toBe(true);
+    expect(useFileTreeStore.getState().findFile('folder-1')?.children?.some((n) => n.id === 'uuid-1')).toBe(true);
+    expect(useFileTreeStore.getState().sessionLocations['uuid-1']).toBe('folder-1');
   });
 
   it('renames, moves and deletes nodes', async () => {
     useFileTreeStore.setState({
       fileTree: [
-        { id: 's1', name: 'Session 1', type: 'session' },
+        { id: 'session-folder', name: 'Folder', type: 'folder', isOpen: true, children: [{ id: 's1', name: 'Session 1', type: 'session' }] },
         { id: 'f2', name: 'File 2', type: 'md' },
       ],
       localSessions: [{ id: 's1', name: 'Session 1', type: 'session' }],
+      sessionLocations: { s1: 'session-folder' },
       loading: false,
     });
 
@@ -134,6 +172,7 @@ describe('useFileTreeStore', () => {
 
     mockApi.deleteSession.mockResolvedValueOnce({ success: true });
     await useFileTreeStore.getState().deleteFile('s1');
+    expect(useFileTreeStore.getState().findFile('s1')).toBeNull();
     expect(clearSessionMessages).toHaveBeenCalledWith('s1');
     expect(clearSessionPermissions).toHaveBeenCalledWith('s1');
     expect(closeTabInAllPanes).toHaveBeenCalledWith('s1');
@@ -147,6 +186,7 @@ describe('useFileTreeStore', () => {
     useFileTreeStore.setState({
       fileTree: [],
       localSessions: undefined as any,
+      sessionLocations: {},
       loading: false,
     });
     mockApi.listFiles.mockResolvedValueOnce({
@@ -175,6 +215,7 @@ describe('useFileTreeStore', () => {
     useFileTreeStore.setState({
       fileTree: [{ id: 'same-id', name: 'Old Name', type: 'session' }],
       localSessions: [{ id: 'same-id', name: 'Old Name', type: 'session' }],
+      sessionLocations: { 'same-id': null },
       loading: false,
     });
     vi.stubGlobal('crypto', { randomUUID: () => 'same-id' });
@@ -202,6 +243,7 @@ describe('useFileTreeStore', () => {
         },
       ],
       localSessions: [{ id: 'keep-session', name: 'Keep Session', type: 'session' }],
+      sessionLocations: { 'keep-session': null },
       loading: false,
     });
     useFileTreeStore.getState().renameFile('nested', 'Renamed.md');
@@ -217,5 +259,23 @@ describe('useFileTreeStore', () => {
     mockApi.moveFile.mockResolvedValueOnce({ success: true });
     await useFileTreeStore.getState().moveFile('nested', undefined, 'missing-sibling');
     expect(mockApi.moveFile).toHaveBeenCalledWith('nested', null);
+  });
+
+  it('moves sessions between folders without backend file moves', async () => {
+    useFileTreeStore.setState({
+      fileTree: [
+        { id: 'folder-a', name: 'Folder A', type: 'folder', isOpen: true, children: [] },
+        { id: 'folder-b', name: 'Folder B', type: 'folder', isOpen: true, children: [{ id: 'session-1', name: 'Session 1', type: 'session' }] },
+      ],
+      localSessions: [{ id: 'session-1', name: 'Session 1', type: 'session' }],
+      sessionLocations: { 'session-1': 'folder-b' },
+      loading: false,
+    });
+
+    await useFileTreeStore.getState().moveFile('session-1', 'folder-a');
+
+    expect(mockApi.moveFile).not.toHaveBeenCalled();
+    expect(useFileTreeStore.getState().sessionLocations['session-1']).toBe('folder-a');
+    expect(useFileTreeStore.getState().findFile('folder-a')?.children?.some((node) => node.id === 'session-1')).toBe(true);
   });
 });

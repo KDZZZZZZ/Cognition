@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   FileText,
   MessageSquare,
@@ -111,10 +112,10 @@ export function ContextMenu({
 
   const Divider = () => <div className="border-t border-theme-border/20 my-1" />;
 
-  return (
+  const menu = (
     <div
       ref={menuRef}
-      className="fixed bg-theme-bg border border-theme-border/20 rounded-lg shadow-lg py-1 z-50 min-w-[180px]"
+      className="fixed bg-theme-bg border border-theme-border/20 rounded-lg shadow-lg py-1 z-[220] min-w-[180px]"
       style={{ left: adjustedX, top: adjustedY }}
     >
       {/* New items */}
@@ -158,4 +159,10 @@ export function ContextMenu({
       )}
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return menu;
+  }
+
+  return createPortal(menu, document.body);
 }

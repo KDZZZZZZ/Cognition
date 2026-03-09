@@ -113,6 +113,10 @@ def _is_index_ready(index_status: dict[str, Any]) -> bool:
     return parse_status == "ready" and embedding_status in {"ready", "ready_with_errors"}
 
 
+def _is_upload_acceptable_index_status(index_status: dict[str, Any]) -> bool:
+    return _is_index_ready(index_status)
+
+
 def _format_index_failure(index_status: dict[str, Any]) -> str:
     parse_status = str(index_status.get("parse_status") or "unknown")
     embedding_status = str(index_status.get("embedding_status") or "unknown")
@@ -385,15 +389,6 @@ async def upload_file(
     }
     file_type = file_type_map.get(file_ext, "txt")
 
-    if _requires_index_ready(file_type):
-        embedding_backend_ready = reader_orchestrator.embedding_provider.is_enabled() and vector_store.enabled
-        if not embedding_backend_ready:
-            await _cleanup_partial_upload(db=db, file_id=None, upload_path=upload_path)
-            raise HTTPException(
-                status_code=503,
-                detail="Embedding/index backend is unavailable. Verify the embedding model and vector store, then retry the upload.",
-            )
-
     db_file: Optional[FileModel] = None
     chunks = []
     metadata: dict[str, Any] = {}
@@ -444,7 +439,7 @@ async def upload_file(
                 chunks_hint=chunks if chunks else None,
                 mode="all",
             )
-            if not _is_index_ready(index_status):
+            if not _is_upload_acceptable_index_status(index_status):
                 raise RuntimeError(_format_index_failure(index_status))
 
         await db.commit()

@@ -2,6 +2,28 @@ import { create } from 'zustand';
 import { api } from '../api/client';
 import type { FileMetadata, DocumentChunk, FileVersion, UploadProgressSnapshot } from '../api/client';
 
+function hasCompletedIndexing(indexStatus: unknown): boolean {
+  if (!indexStatus || typeof indexStatus !== 'object') return true;
+
+  const parseStatus = String((indexStatus as { parse_status?: unknown }).parse_status || '').toLowerCase();
+  const embeddingStatus = String((indexStatus as { embedding_status?: unknown }).embedding_status || '').toLowerCase();
+
+  return parseStatus === 'ready' && (embeddingStatus === 'ready' || embeddingStatus === 'ready_with_errors');
+}
+
+function formatIncompleteIndexingError(indexStatus: unknown): string {
+  if (!indexStatus || typeof indexStatus !== 'object') {
+    return 'Upload finished but OCR/embedding did not complete';
+  }
+
+  const parseStatus = String((indexStatus as { parse_status?: unknown }).parse_status || 'unknown');
+  const embeddingStatus = String((indexStatus as { embedding_status?: unknown }).embedding_status || 'unknown');
+  const lastError = String((indexStatus as { last_error?: unknown }).last_error || '').trim();
+
+  const baseMessage = `Upload finished but OCR/embedding did not complete (parse=${parseStatus}, embedding=${embeddingStatus})`;
+  return lastError ? `${baseMessage}: ${lastError}` : baseMessage;
+}
+
 interface FileState {
   files: FileMetadata[];
   selectedFile: FileMetadata | null;
@@ -62,6 +84,14 @@ export const useFileStore = create<FileState>((set, get) => ({
     try {
       const response = await api.uploadFile(file, parentId, options);
       if (response.success && response.data) {
+        if (!hasCompletedIndexing(response.data.index_status)) {
+          set({
+            error: formatIncompleteIndexingError(response.data.index_status),
+            loading: false,
+          });
+          return null;
+        }
+
         const fileId = response.data.file_id;
         // Reload files
         await get().loadFiles();

@@ -52,6 +52,8 @@ def test_files_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert files_api._normalize_bbox("bad") is None
     assert files_api._bbox_intersects((0, 0, 5, 5), (4, 4, 8, 8)) is True
     assert files_api._bbox_intersects((0, 0, 1, 1), (2, 2, 3, 3)) is False
+    assert files_api._is_upload_acceptable_index_status({"parse_status": "ready", "embedding_status": "ready"}) is True
+    assert files_api._is_upload_acceptable_index_status({"parse_status": "ready", "embedding_status": "disabled"}) is False
 
     snapshots = files_api._build_diff_line_snapshots("a\nb", "a\nc\nd")
     assert snapshots[0]["decision"] == LineDecision.ACCEPTED
@@ -179,6 +181,56 @@ async def test_upload_file_rolls_back_when_indexing_fails(
     assert not (tmp_path / "broken.md").exists()
     delete_by_file.assert_called_once()
     delete_segment_embeddings.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_file_rolls_back_when_embedding_is_disabled(
+    db_session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path), raising=False)
+    monkeypatch.setattr(settings, "MAX_FILE_SIZE", 10_000_000, raising=False)
+    monkeypatch.setattr(settings, "ALLOWED_EXTENSIONS", {".md"}, raising=False)
+
+    async def fake_parse_file(path: str, file_id: str, file_type: str):  # noqa: ARG001
+        return (
+            [
+                DocumentChunk(
+                    id="chunk-disabled-1",
+                    file_id=file_id,
+                    page=1,
+                    chunk_index=0,
+                    content="Parsed content",
+                    bbox=None,
+                )
+            ],
+            {"page_count": 1},
+        )
+
+    monkeypatch.setattr(
+        files_api.parser,
+        "parse_file",
+        AsyncMock(side_effect=fake_parse_file),
+    )
+    monkeypatch.setattr(files_api.reader_orchestrator.embedding_provider, "is_enabled", lambda: False)
+    monkeypatch.setattr(files_api.vector_store, "enabled", False)
+    monkeypatch.setattr(files_api.vector_store, "delete_by_file", AsyncMock(return_value=None))
+    monkeypatch.setattr(files_api.vector_store, "delete_segment_embeddings_by_file", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        files_api.reader_orchestrator,
+        "build_segments_for_file",
+        AsyncMock(return_value={"parse_status": "ready", "embedding_status": "disabled", "last_error": "embedding provider unavailable"}),
+    )
+
+    upload = UploadFile(filename="disabled.md", file=io.BytesIO(b"# Title\n\nBody"))
+    with pytest.raises(HTTPException) as excinfo:
+        await files_api.upload_file(file=upload, parent_id=None, db=db_session)
+
+    assert excinfo.value.status_code == 503
+    assert "embedding=disabled" in excinfo.value.detail
+    stored = (await db_session.execute(select(File).where(File.name == "disabled.md"))).scalar_one_or_none()
+    assert stored is None
 
 
 @pytest.mark.asyncio

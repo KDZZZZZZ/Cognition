@@ -14,8 +14,9 @@ import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useVersionStore } from '../../stores/versionStore';
 import { useDiffStore } from '../../stores/diffStore';
+import { getApiBaseUrl } from '../../config/runtime';
 import { FileIcon } from '../ui/FileIcon';
-import { api, BASE_URL, DiffEventDTO } from '../../api/client';
+import { api, DiffEventDTO } from '../../api/client';
 import { ViewMode, Permission } from '../../types';
 
 interface PaneRendererProps {
@@ -89,7 +90,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
   const { getFileContent, updateFileContent, files, loadFiles } = useFileStore();
   const { createFile: createTreeFile } = useFileTreeStore();
   const { permissions: allPermissions, togglePermission, setPermission } = useSessionStore();
-  const { setActiveTab, closeTab, reorderTabs, moveTabToPane, openTab, getAllOpenTabs, closePane, createPane, setTabMode } = usePaneStore();
+  const { setActiveTab, closeTab, reorderTabs, moveTabToPane, openTab, getAllOpenTabs, closePane, setTabMode } = usePaneStore();
   const { sessionId, setSessionId, sendMessageForSession, addSessionReference } = useChatStore();
   const { addVersion } = useVersionStore();
   const { activeDiff, clearDiff } = useDiffStore();
@@ -618,18 +619,6 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
           })}
         </div>
 
-        {/* Split Pane Button */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            createPane();
-          }}
-          className="w-8 h-8 flex items-center justify-center hover:bg-theme-text/10 text-theme-text/60 transition-colors"
-          title="Split Pane"
-        >
-          <Split size={14} />
-        </button>
-
         {/* New Tab Button */}
         <div className="relative">
           <button
@@ -801,7 +790,7 @@ export function PaneRenderer({ pane, isActive, onActivate, onDragOver, onDragLea
             ) : (
               <PDFViewer
                 fileId={activeTab.id}
-                filePath={pdfFileUrl.startsWith('http') ? pdfFileUrl : `${BASE_URL}${pdfFileUrl}`}
+                filePath={pdfFileUrl.startsWith('http') ? pdfFileUrl : `${getApiBaseUrl()}${pdfFileUrl}`}
                 onPageChange={(page) => {
                   setCurrentPage(page);
                   handleViewportChange(0, 1000, page);

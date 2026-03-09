@@ -1,12 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useDiffStore } from '../stores/diffStore';
-import { runtimeConfig } from '../config/runtime';
+import { getWsBaseUrl, subscribeToRuntimeOverrides } from '../config/runtime';
 
 export type RealtimeStatus = 'checking' | 'connected' | 'reconnecting';
-
-function getWsBaseUrl() {
-  return runtimeConfig.wsBaseUrl;
-}
 
 function closeSocketGracefully(socket: WebSocket | null) {
   if (!socket) return;
@@ -35,11 +31,17 @@ export function useWebSocket(
   const reconnectTimeout = useRef<number>();
   const connectTimeout = useRef<number>();
   const { clearDiff } = useDiffStore();
+  const [wsBase, setWsBase] = useState(() => getWsBaseUrl());
+
+  useEffect(() => {
+    return subscribeToRuntimeOverrides(() => {
+      setWsBase(getWsBaseUrl());
+    });
+  }, []);
 
   useEffect(() => {
     if (!sessionId) return;
 
-    const wsBase = getWsBaseUrl();
     let shouldReconnect = true;
     let hasConnectedAtLeastOnce = false;
 
@@ -104,5 +106,5 @@ export function useWebSocket(
         ws.current = null;
       }
     };
-  }, [sessionId, clearDiff, onStatusChange]);
+  }, [sessionId, clearDiff, onStatusChange, wsBase]);
 }

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api } from '../api/client';
+import { getDefaultChatModel } from '../config/runtime';
 import type {
   ChatMessage,
   TaskEventPayload,
@@ -11,7 +12,7 @@ import type {
 } from '../api/client';
 import { useSessionStore } from './sessionStore';
 
-const DEFAULT_CHAT_MODEL = (import.meta.env.VITE_DEFAULT_MODEL as string | undefined) || 'Pro/MiniMaxAI/MiniMax-M2.5';
+const DEFAULT_CHAT_MODEL = getDefaultChatModel();
 
 interface ActiveTaskState {
   taskId: string;

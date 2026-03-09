@@ -40,7 +40,12 @@ vi.mock('../../../stores/paneStore', () => ({
 }));
 
 vi.mock('../../../stores/apiStore', () => ({
-  useFileStore: () => ({ uploadFile: m.uploadFile, downloadFile: m.downloadFile }),
+  useFileStore: Object.assign(
+    () => ({ uploadFile: m.uploadFile, downloadFile: m.downloadFile }),
+    {
+      getState: () => ({ error: null }),
+    }
+  ),
 }));
 
 vi.mock('../../ui/FileIcon', () => ({
@@ -311,6 +316,54 @@ describe('FileTree', () => {
     const input = document.body.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [] } });
     expect(m.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('shows upload errors instead of silently dismissing them', async () => {
+    m.uploadFile.mockResolvedValueOnce(null);
+    render(<FileTree />);
+
+    fireEvent.click(screen.getByTitle('Add at current path'));
+    fireEvent.click(screen.getByText('Upload File'));
+
+    const input = document.body.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['broken'], 'broken.pdf', { type: 'application/pdf' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('upload-error-banner')).toHaveTextContent('Upload failed for broken.pdf');
+    });
+  });
+
+  it('shows the pending upload row immediately, including in an empty tree', async () => {
+    let resolveUpload: ((value: string) => void) | undefined;
+    m.fileTreeState = {
+      ...m.fileTreeState,
+      fileTree: [],
+    };
+    m.uploadFile.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveUpload = resolve;
+        })
+    );
+
+    render(<FileTree />);
+
+    fireEvent.click(screen.getByTitle('Add at current path'));
+    fireEvent.click(screen.getByText('Upload File'));
+
+    const input = document.body.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['pdf'], 'queued.pdf', { type: 'application/pdf' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(await screen.findByTestId('upload-pending-row')).toHaveTextContent('queued.pdf');
+    expect(screen.getByTestId('upload-inline-spinner')).toBeInTheDocument();
+
+    resolveUpload?.('uploaded-id');
+
+    await waitFor(() => {
+      expect(m.loadFilesFromBackend).toHaveBeenCalled();
+    });
   });
 
   it('handles rename/session-path create and clipboard paste for folder/file', async () => {

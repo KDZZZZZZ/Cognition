@@ -314,6 +314,10 @@ vi.mock('../../../api/client', () => ({
   },
 }));
 
+vi.mock('../../../config/runtime', () => ({
+  getApiBaseUrl: () => 'http://localhost:8000',
+}));
+
 function createDataTransfer(seed: Record<string, string> = {}) {
   const data = { ...seed };
   return {
@@ -382,7 +386,7 @@ describe('PaneRenderer', () => {
     m.rawEditorChangeSpy.mockReset();
   });
 
-  it('renders empty pane and handles toolbar actions', () => {
+  it('renders empty pane', () => {
     render(
       <PaneRenderer
         pane={{ id: 'p1', tabs: [], activeTabId: null }}
@@ -395,8 +399,6 @@ describe('PaneRenderer', () => {
     );
 
     expect(screen.getByText('Empty Pane')).toBeInTheDocument();
-    fireEvent.click(screen.getByTitle('Split Pane'));
-    expect(m.createPane).toHaveBeenCalled();
   });
 
   it('handles markdown editing and creating new tabs', async () => {

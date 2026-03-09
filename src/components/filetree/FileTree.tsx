@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useFileTreeStore } from '../../stores/fileTreeStore';
 import { usePaneStore } from '../../stores/paneStore';
 import { useFileStore } from '../../stores/apiStore';
@@ -37,104 +38,34 @@ interface QuickActionMenuState {
 }
 
 interface UploadProgressState {
-  total: number;
-  completed: number;
+  parentId: string | null;
   currentFileIndex: number;
+  total: number;
   currentFileName: string;
-  currentFilePages: number | null;
-  currentFileSizeMb: number;
-  phase: 'preparing' | 'uploading' | 'processing' | 'finalizing';
-  currentFileProgress: number;
-  overallProgress: number;
-  estimateRemainingMs: number | null;
-  elapsedMs: number;
+  overallProgress?: number;
+  phase?: 'preparing' | 'uploading' | 'processing' | 'finalizing';
+  currentFilePages?: number;
+  currentFileSizeMb?: number;
+  currentFileProgress?: number;
+  completed?: number;
+  elapsedMs?: number | null;
+  estimateRemainingMs?: number;
 }
 
 const QUICK_ACTION_MENU_WIDTH = 190;
 const QUICK_ACTION_MENU_HEIGHT = 240;
 const QUICK_ACTION_MENU_MARGIN = 8;
-const UPLOAD_BENCHMARK_KEY = 'cognition.upload.benchmark.v1';
-const DEFAULT_UPLOAD_BENCHMARK = {
-  pdfMsPerPage: 1800,
-  genericMsPerMb: 1100,
-};
 
-function readUploadBenchmark() {
-  if (typeof window === 'undefined') return DEFAULT_UPLOAD_BENCHMARK;
-  try {
-    const raw = window.localStorage.getItem(UPLOAD_BENCHMARK_KEY);
-    if (!raw) return DEFAULT_UPLOAD_BENCHMARK;
-    const parsed = JSON.parse(raw);
-    return {
-      pdfMsPerPage: Number(parsed?.pdfMsPerPage) || DEFAULT_UPLOAD_BENCHMARK.pdfMsPerPage,
-      genericMsPerMb: Number(parsed?.genericMsPerMb) || DEFAULT_UPLOAD_BENCHMARK.genericMsPerMb,
-    };
-  } catch {
-    return DEFAULT_UPLOAD_BENCHMARK;
-  }
+function inferPendingFileType(fileName: string): FileNode['type'] {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.pdf')) return 'pdf';
+  if (lower.endsWith('.md')) return 'md';
+  if (lower.endsWith('.txt')) return 'txt';
+  if (lower.endsWith('.docx') || lower.endsWith('.doc')) return 'docx';
+  return 'md';
 }
 
-function writeUploadBenchmark(next: typeof DEFAULT_UPLOAD_BENCHMARK) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(UPLOAD_BENCHMARK_KEY, JSON.stringify(next));
-}
-
-async function readPdfPageCount(file: File): Promise<number | null> {
-  if (!file.name.toLowerCase().endsWith('.pdf')) return null;
-  try {
-    const { pdfjs } = await import('react-pdf');
-    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-      pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-    }
-    const buffer = await file.arrayBuffer();
-    const doc = await pdfjs.getDocument({ data: buffer }).promise;
-    return Number.isFinite(doc.numPages) ? doc.numPages : null;
-  } catch {
-    return null;
-  }
-}
-
-async function estimateUploadWork(file: File) {
-  const benchmark = readUploadBenchmark();
-  const sizeMb = Math.max(file.size / (1024 * 1024), 0.05);
-  const pages = await readPdfPageCount(file);
-
-  if (pages) {
-    return {
-      pages,
-      sizeMb,
-      estimatedMs: Math.max(3000, Math.round(pages * benchmark.pdfMsPerPage + sizeMb * 420)),
-    };
-  }
-
-  return {
-    pages: null,
-    sizeMb,
-    estimatedMs: Math.max(2200, Math.round(sizeMb * benchmark.genericMsPerMb + 1400)),
-  };
-}
-
-function updateUploadBenchmark(
-  estimate: Awaited<ReturnType<typeof estimateUploadWork>>,
-  elapsedMs: number
-) {
-  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
-  const current = readUploadBenchmark();
-  if (estimate.pages && estimate.pages > 0) {
-    current.pdfMsPerPage = Math.max(
-      600,
-      Math.round(current.pdfMsPerPage * 0.72 + (elapsedMs / estimate.pages) * 0.28)
-    );
-  } else if (estimate.sizeMb > 0) {
-    current.genericMsPerMb = Math.max(
-      350,
-      Math.round(current.genericMsPerMb * 0.72 + (elapsedMs / estimate.sizeMb) * 0.28)
-    );
-  }
-  writeUploadBenchmark(current);
-}
-
-function formatDuration(ms: number | null) {
+function formatDuration(ms: number | null | undefined) {
   if (!ms || ms <= 0) return 'finishing';
   const totalSeconds = Math.max(1, Math.round(ms / 1000));
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -150,10 +81,10 @@ function phaseLabel(phase: UploadProgressState['phase']) {
   return 'Finalizing index';
 }
 
-function UploadProgressRing({ progress }: { progress: number }) {
+function UploadProgressRing({ progress }: { progress: number | undefined }) {
   const radius = 34;
   const circumference = 2 * Math.PI * radius;
-  const clamped = Math.max(0, Math.min(100, progress));
+  const clamped = Math.max(0, Math.min(100, progress ?? 0));
   const dashOffset = circumference * (1 - clamped / 100);
 
   return (
@@ -230,6 +161,7 @@ export function FileTree() {
   });
   const [pathFocusId, setPathFocusId] = useState<string | undefined>(undefined);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const treeRef = useRef<HTMLDivElement>(null);
   const activeFileId = panes.find((p) => p.id === activePaneId)?.activeTabId || null;
@@ -461,91 +393,42 @@ export function FileTree() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    setUploadError(null);
     await loadFilesFromBackend();
     setRefreshing(false);
   };
 
   const handleSelectedFiles = useCallback(async (selectedFiles: File[], parentId: string | null) => {
     if (selectedFiles.length === 0) return;
+    setUploadError(null);
     try {
       for (const [index, file] of selectedFiles.entries()) {
-        const estimate = await estimateUploadWork(file);
-        const startedAt = performance.now();
-        let uploadRatio = 0;
-        let settled = false;
+        setUploadProgress({
+          parentId: parentId || null,
+          currentFileIndex: index + 1,
+          total: selectedFiles.length,
+          currentFileName: file.name,
+          overallProgress: 0,
+          phase: 'uploading',
+          currentFilePages: undefined,
+          currentFileSizeMb: file.size / (1024 * 1024),
+          currentFileProgress: 0,
+          completed: index,
+          elapsedMs: null,
+          estimateRemainingMs: undefined,
+        });
 
-        const emitProgress = (phaseOverride?: UploadProgressState['phase']) => {
-          const elapsedMs = Math.max(0, performance.now() - startedAt);
-          const phase = phaseOverride || (uploadRatio >= 1 ? 'processing' : 'uploading');
-          let currentFileRatio = 0.04;
-          if (phase === 'preparing') {
-            currentFileRatio = 0.04;
-          } else if (phase === 'uploading') {
-            currentFileRatio = Math.max(0.08, uploadRatio * 0.24);
-          } else if (phase === 'processing') {
-            const processingRatio = Math.min(0.72, elapsedMs / Math.max(estimate.estimatedMs, 1) * 0.72);
-            currentFileRatio = Math.min(0.96, 0.24 + processingRatio);
-          } else {
-            currentFileRatio = 1;
-          }
-
-          setUploadProgress({
-            total: selectedFiles.length,
-            completed: phase === 'finalizing' ? index + 1 : index,
-            currentFileIndex: index + 1,
-            currentFileName: file.name,
-            currentFilePages: estimate.pages,
-            currentFileSizeMb: estimate.sizeMb,
-            phase,
-            currentFileProgress: Math.round(currentFileRatio * 100),
-            overallProgress: Math.round(((index + currentFileRatio) / selectedFiles.length) * 100),
-            estimateRemainingMs: phase === 'finalizing' ? 0 : Math.max(0, estimate.estimatedMs - elapsedMs),
-            elapsedMs: Math.round(elapsedMs),
-          });
-        };
-
-        emitProgress('preparing');
-        const ticker = window.setInterval(() => {
-          if (!settled) emitProgress();
-        }, 140);
-
-        try {
-          const uploadedFileId = await apiUploadFile(file, parentId || null, {
-            onUploadProgress: (snapshot) => {
-              uploadRatio = Math.min(1, snapshot.percent / 100);
-              emitProgress(uploadRatio >= 1 ? 'processing' : 'uploading');
-            },
-          });
-          if (!uploadedFileId) {
-            throw new Error(`Upload failed for ${file.name}`);
-          }
-          settled = true;
-          window.clearInterval(ticker);
-          const elapsedMs = Math.max(0, performance.now() - startedAt);
-          updateUploadBenchmark(estimate, elapsedMs);
-          setUploadProgress({
-            total: selectedFiles.length,
-            completed: index + 1,
-            currentFileIndex: index + 1,
-            currentFileName: file.name,
-            currentFilePages: estimate.pages,
-            currentFileSizeMb: estimate.sizeMb,
-            phase: 'finalizing',
-            currentFileProgress: 100,
-            overallProgress: Math.round(((index + 1) / selectedFiles.length) * 100),
-            estimateRemainingMs: 0,
-            elapsedMs: Math.round(elapsedMs),
-          });
-        } finally {
-          settled = true;
-          window.clearInterval(ticker);
+        const uploadedFileId = await apiUploadFile(file, parentId || null);
+        if (!uploadedFileId) {
+          const errorMessage = useFileStore.getState().error || `Upload failed for ${file.name}`;
+          throw new Error(errorMessage);
         }
       }
       await loadFilesFromBackend();
     } catch (error) {
       console.error('Failed to upload file(s):', error);
+      setUploadError(error instanceof Error ? error.message : 'Failed to upload file(s)');
     } finally {
-      await new Promise((resolve) => window.setTimeout(resolve, 480));
       setUploadProgress(null);
     }
   }, [apiUploadFile, loadFilesFromBackend]);
@@ -761,6 +644,59 @@ export function FileTree() {
     );
   };
 
+  const quickActionMenuContent = quickActionMenu.visible ? (
+    <div
+      data-testid="explorer-quick-action-menu"
+      className="fixed z-[215] min-w-[190px] rounded-lg border border-theme-border/25 bg-theme-bg shadow-[0_12px_28px_rgba(0,0,0,0.16)] py-1"
+      style={{
+        left: quickActionMenu.x,
+        top: quickActionMenu.y,
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        data-testid="quick-action-new-file"
+        className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+        onClick={() => {
+          openNewDialog('md', quickActionMenu.parentId);
+          setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+        }}
+      >
+        New File
+      </button>
+      <button
+        data-testid="quick-action-new-session"
+        className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+        onClick={() => {
+          openNewDialog('session', quickActionMenu.parentId);
+          setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+        }}
+      >
+        New Session
+      </button>
+      <button
+        data-testid="quick-action-new-folder"
+        className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+        onClick={() => {
+          openNewDialog('folder', quickActionMenu.parentId);
+          setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+        }}
+      >
+        New Folder
+      </button>
+      <button
+        data-testid="quick-action-upload-file"
+        className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
+        onClick={() => {
+          triggerUploadForParent(quickActionMenu.parentId);
+          setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
+        }}
+      >
+        Upload File
+      </button>
+    </div>
+  ) : null;
+
   return (
     <>
       <div
@@ -803,13 +739,13 @@ export function FileTree() {
           </button>
         </div>
 
-        {uploadProgress && (
+        {false && uploadProgress && (
           <div
             data-testid="upload-progress-card"
             className="mx-4 mb-3 overflow-hidden rounded-[26px] border border-sky-200/75 bg-[linear-gradient(135deg,rgba(239,246,255,0.98),rgba(224,242,254,0.92)_52%,rgba(245,243,255,0.94))] px-4 py-4 shadow-[0_18px_40px_rgba(14,116,144,0.12)]"
           >
             <div className="flex items-center gap-4">
-              <UploadProgressRing progress={uploadProgress.overallProgress} />
+              <UploadProgressRing progress={uploadProgress.overallProgress ?? 0} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -823,15 +759,15 @@ export function FileTree() {
                       File {uploadProgress.currentFileIndex}/{uploadProgress.total}
                       {uploadProgress.currentFilePages
                         ? ` · ${uploadProgress.currentFilePages} pages`
-                        : ` · ${uploadProgress.currentFileSizeMb.toFixed(1)} MB`}
+                        : ` · ${(uploadProgress.currentFileSizeMb ?? 0).toFixed(1)} MB`}
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-semibold tracking-[-0.04em] text-slate-950">
-                      {uploadProgress.currentFileProgress}%
+                      {uploadProgress.currentFileProgress ?? 0}%
                     </div>
                     <div className="text-[11px] text-slate-500">
-                      {uploadProgress.completed} completed
+                      {uploadProgress.completed ?? 0} completed
                     </div>
                   </div>
                 </div>
@@ -839,7 +775,7 @@ export function FileTree() {
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/70 ring-1 ring-sky-200/60">
                   <div
                     className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e_0%,#2563eb_56%,#7c3aed_100%)] transition-[width] duration-200 ease-out"
-                    style={{ width: `${uploadProgress.currentFileProgress}%` }}
+                    style={{ width: `${uploadProgress.currentFileProgress ?? 0}%` }}
                   />
                 </div>
 
@@ -856,76 +792,54 @@ export function FileTree() {
           </div>
         )}
 
+        {uploadError && (
+          <div
+            data-testid="upload-error-banner"
+            className="mx-4 mb-3 rounded-2xl border border-rose-200/85 bg-rose-50/95 px-4 py-3 text-sm text-rose-700 shadow-[0_8px_24px_rgba(190,24,93,0.08)]"
+          >
+            {uploadError}
+          </div>
+        )}
+
         {/* File Tree */}
         {loading ? (
           <div className="px-4 py-8 text-center text-theme-text/40 text-sm">
             Loading files...
           </div>
-        ) : fileTree.length === 0 ? (
-          <div className="px-4 py-8 text-center text-theme-text/40 text-sm">
-            No files yet.
-            <br />
-            Create a file, session, or folder to get started.
-          </div>
         ) : (
           <div className="px-1">
-            {fileTree.map((item) => renderTreeItem(item, 0))}
+            {uploadProgress && (
+              <div data-testid="upload-pending-row" className="mb-1">
+                <div
+                  className="flex items-center gap-1 rounded-[8px] bg-[#f5efe7] text-theme-text/90"
+                  style={{ paddingLeft: `${(uploadProgress.parentId ? Math.max(0, findPathForNode(uploadProgress.parentId).length - 1) : 0) * 16 + 8}px`, paddingRight: '8px' }}
+                >
+                  <span className="w-4 flex-shrink-0 text-theme-text/30" />
+                  <FileIcon type={inferPendingFileType(uploadProgress.currentFileName)} />
+                  <span className="truncate flex-1 py-1 text-sm">{uploadProgress.currentFileName}</span>
+                  <span
+                    data-testid="upload-inline-spinner"
+                    className="h-3.5 w-3.5 flex-shrink-0 animate-spin rounded-full border-2 border-[#4a2d1f]/20 border-t-[#4a2d1f]"
+                  />
+                </div>
+              </div>
+            )}
+            {fileTree.length === 0 ? (
+              <div className="px-3 py-8 text-center text-theme-text/40 text-sm">
+                No files yet.
+                <br />
+                Create a file, session, or folder to get started.
+              </div>
+            ) : (
+              fileTree.map((item) => renderTreeItem(item, 0))
+            )}
           </div>
         )}
       </div>
       {/* Folder/Root Quick Action Menu */}
-      {quickActionMenu.visible && (
-        <div
-          data-testid="explorer-quick-action-menu"
-          className="fixed z-[60] min-w-[190px] rounded-lg border border-theme-border/25 bg-theme-bg shadow-[0_12px_28px_rgba(0,0,0,0.16)] py-1"
-          style={{
-            left: quickActionMenu.x,
-            top: quickActionMenu.y,
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            data-testid="quick-action-new-file"
-            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
-            onClick={() => {
-              openNewDialog('md', quickActionMenu.parentId);
-              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
-            }}
-          >
-            New File
-          </button>
-          <button
-            data-testid="quick-action-new-session"
-            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
-            onClick={() => {
-              openNewDialog('session', quickActionMenu.parentId);
-              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
-            }}
-          >
-            New Session
-          </button>
-          <button
-            data-testid="quick-action-new-folder"
-            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
-            onClick={() => {
-              openNewDialog('folder', quickActionMenu.parentId);
-              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
-            }}
-          >
-            New Folder
-          </button>
-          <button
-            data-testid="quick-action-upload-file"
-            className="w-full px-3 py-2 text-xs text-left text-theme-text/80 hover:bg-theme-text/10 transition-colors"
-            onClick={() => {
-              triggerUploadForParent(quickActionMenu.parentId);
-              setQuickActionMenu({ visible: false, x: 0, y: 0, parentId: undefined });
-            }}
-          >
-            Upload File
-          </button>
-        </div>
-      )}
+      {quickActionMenuContent && typeof document !== 'undefined'
+        ? createPortal(quickActionMenuContent, document.body)
+        : quickActionMenuContent}
 
       {/* Context Menu */}
       {contextMenu.visible && (

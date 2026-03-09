@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Menu } from 'lucide-react';
+import { Columns2, Menu, UserRound } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { PaneRenderer } from './components/pane/PaneRenderer';
+import { RuntimeSettingsDialog } from './components/ui/RuntimeSettingsDialog';
+import { getDefaultChatModel, getRuntimeOverrides, saveRuntimeOverrides, subscribeToRuntimeOverrides, type RuntimeOverrides } from './config/runtime';
 import { useUIStore } from './stores/uiStore';
 import { usePaneStore } from './stores/paneStore';
 import { useFileStore } from './stores/apiStore';
+import { useChatStore } from './stores/chatStore';
 import { FileNode, ViewMode } from './types';
 
 function App() {
@@ -12,7 +15,10 @@ function App() {
   const { panes, activePaneId: storeActivePaneId, createPane, openTab, setActivePane: setPaneStoreActivePane } =
     usePaneStore();
   const { loadFiles } = useFileStore();
+  const setChatModel = useChatStore((state) => state.setModel);
   const paneCount = panes.length;
+  const [showRuntimeSettings, setShowRuntimeSettings] = useState(false);
+  const [runtimeOverrides, setRuntimeOverrides] = useState<RuntimeOverrides>(() => getRuntimeOverrides());
   const [isMobileSidebarMode, setIsMobileSidebarMode] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.matchMedia('(max-width: 960px)').matches;
@@ -37,6 +43,19 @@ function App() {
     mediaQuery.addListener(syncSidebarMode);
     return () => mediaQuery.removeListener(syncSidebarMode);
   }, []);
+
+  useEffect(() => {
+    return subscribeToRuntimeOverrides(() => {
+      setRuntimeOverrides(getRuntimeOverrides());
+    });
+  }, []);
+
+  const handleSaveRuntimeSettings = (value: RuntimeOverrides) => {
+    saveRuntimeOverrides(value);
+    setRuntimeOverrides(value);
+    setChatModel(value.primary.model || getDefaultChatModel());
+    void loadFiles();
+  };
 
   const handleDrop = (e: React.DragEvent, paneId: string) => {
     e.preventDefault();
@@ -66,31 +85,36 @@ function App() {
       <div
         className="h-12 border-b border-theme-border/30 paper-divider-dashed surface-panel flex items-center px-4 justify-between flex-shrink-0 z-20 transition-colors duration-300"
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
             onClick={toggleSidebar}
             className="p-1.5 hover:bg-theme-text/8 rounded text-theme-text/80 transition-colors"
+            title="侧边栏"
           >
             <Menu size={20} />
           </button>
-          <div className="hidden sm:flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-theme-text/45">
-            <span className="accent-dot" />
-            Workspace Ready
-          </div>
+          <button
+            onClick={createPane}
+            className="p-1.5 hover:bg-theme-text/8 rounded text-theme-text/80 transition-colors"
+            title="拆分视图"
+          >
+            <Columns2 size={18} />
+          </button>
+          <button
+            onClick={() => setShowRuntimeSettings(true)}
+            className="p-1.5 hover:bg-theme-text/8 rounded text-theme-text/80 transition-colors"
+            title="接口与模型"
+          >
+            <UserRound size={18} />
+          </button>
         </div>
 
         <div className="text-sm font-semibold tracking-[0.08em] uppercase text-theme-text/65 select-none flex items-center gap-2">
           <span className="text-theme-text/40">Cognition</span>
-          <span className="h-3 w-px bg-theme-border/30" />
-          <span>Knowledge IDE</span>
-        </div>
-
-        <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.12em] text-theme-text/45">
-          <span>Desktop Workspace</span>
           {paneCount > 0 && (
             <>
               <span className="h-3 w-px bg-theme-border/20" />
-              <span>{paneCount} Pane{paneCount === 1 ? '' : 's'} Open</span>
+              <span>{paneCount}</span>
             </>
           )}
         </div>
@@ -140,6 +164,13 @@ function App() {
           )}
         </div>
       </div>
+
+      <RuntimeSettingsDialog
+        isOpen={showRuntimeSettings}
+        initialValue={runtimeOverrides}
+        onClose={() => setShowRuntimeSettings(false)}
+        onSave={handleSaveRuntimeSettings}
+      />
     </div>
   );
 }

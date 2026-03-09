@@ -7,6 +7,23 @@ import 'react-pdf/dist/Page/TextLayer.css';
 // Set up PDF.js worker - use CDN for reliable loading
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
+const PAGE_WINDOW_RADIUS = 1;
+const WIDTH_SETTLE_DELAY_MS = 180;
+
+function resolveVisiblePages(currentPage: number, totalPages: number) {
+  if (totalPages <= 0) return [];
+
+  const visibleCount = Math.min(totalPages, PAGE_WINDOW_RADIUS * 2 + 1);
+  const startPage = Math.max(
+    1,
+    Math.min(currentPage - PAGE_WINDOW_RADIUS, totalPages - PAGE_WINDOW_RADIUS * 2)
+  );
+
+  return Array.from({ length: visibleCount }, (_, index) => startPage + index).filter(
+    (page, index, pages) => page >= 1 && page <= totalPages && pages.indexOf(page) === index
+  );
+}
+
 interface PDFViewerProps {
   fileId: string;
   filePath: string;
@@ -21,9 +38,14 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
   const [rotation, setRotation] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [containerWidth, setContainerWidth] = useState<number>(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const widthMeasureTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const visiblePages = resolveVisiblePages(pageNumber, numPages);
+  const numPagesRef = useRef(numPages);
+  const visiblePagesRef = useRef<number[]>(visiblePages);
 
   useEffect(() => {
     setLoading(true);
@@ -33,9 +55,67 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
   }, [filePath]);
 
   useEffect(() => {
+    numPagesRef.current = numPages;
+    visiblePagesRef.current = visiblePages;
+  }, [numPages, visiblePages]);
+
+  useEffect(() => {
     return () => {
       if (scrollTimeoutRef.current) {
         clearTimeout(scrollTimeoutRef.current);
+      }
+      if (widthMeasureTimeoutRef.current) {
+        clearTimeout(widthMeasureTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const applyMeasuredWidth = () => {
+      const nextWidth = container.clientWidth || container.getBoundingClientRect().width || 0;
+      setContainerWidth((currentWidth) => (currentWidth === nextWidth ? currentWidth : nextWidth));
+    };
+
+    const scheduleMeasure = (immediate = false) => {
+      if (widthMeasureTimeoutRef.current) {
+        clearTimeout(widthMeasureTimeoutRef.current);
+      }
+
+      if (immediate) {
+        applyMeasuredWidth();
+        return;
+      }
+
+      widthMeasureTimeoutRef.current = setTimeout(() => {
+        widthMeasureTimeoutRef.current = undefined;
+        applyMeasuredWidth();
+      }, WIDTH_SETTLE_DELAY_MS);
+    };
+
+    scheduleMeasure(true);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => scheduleMeasure());
+      observer.observe(container);
+      return () => {
+        observer.disconnect();
+        if (widthMeasureTimeoutRef.current) {
+          clearTimeout(widthMeasureTimeoutRef.current);
+          widthMeasureTimeoutRef.current = undefined;
+        }
+      };
+    }
+
+    const handleWindowResize = () => scheduleMeasure();
+    window.addEventListener('resize', handleWindowResize);
+    return () => {
+      window.removeEventListener('resize', handleWindowResize);
+      if (widthMeasureTimeoutRef.current) {
+        clearTimeout(widthMeasureTimeoutRef.current);
+        widthMeasureTimeoutRef.current = undefined;
       }
     };
   }, []);
@@ -46,14 +126,38 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
     setLoading(false);
   }
 
+  const resolveReportedScrollMetrics = (container: HTMLDivElement) => {
+    const actualScrollTop = container.scrollTop;
+    const actualScrollHeight = Math.max(container.scrollHeight, container.clientHeight, 1);
+    const currentNumPages = numPagesRef.current;
+    const currentVisiblePages = visiblePagesRef.current;
+
+    if (currentNumPages <= 0 || currentVisiblePages.length === 0) {
+      return {
+        scrollTop: actualScrollTop,
+        scrollHeight: actualScrollHeight,
+      };
+    }
+
+    const averagePageSpan = actualScrollHeight / currentVisiblePages.length;
+    const pagesBefore = Math.max(0, currentVisiblePages[0] - 1);
+    const pagesAfter = Math.max(0, currentNumPages - currentVisiblePages[currentVisiblePages.length - 1]);
+
+    return {
+      scrollTop: Math.max(0, Math.round(actualScrollTop + pagesBefore * averagePageSpan)),
+      scrollHeight: Math.max(
+        container.clientHeight,
+        Math.round(actualScrollHeight + (pagesBefore + pagesAfter) * averagePageSpan)
+      ),
+    };
+  };
+
   function onPageLoaded() {
     // Report scroll position after page loads
     setTimeout(() => {
       if (containerRef.current && onScrollChange) {
-        onScrollChange(
-          containerRef.current.scrollTop,
-          containerRef.current.scrollHeight
-        );
+        const metrics = resolveReportedScrollMetrics(containerRef.current);
+        onScrollChange(metrics.scrollTop, metrics.scrollHeight);
       }
     }, 100);
   }
@@ -75,6 +179,38 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
     container.scrollTo({ top: targetTop, behavior });
   };
 
+  const resolveVisiblePage = () => {
+    const container = containerRef.current;
+    if (!container) return null;
+
+    const pageElements = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-page-number]')
+    );
+    if (pageElements.length === 0) return null;
+
+    const containerRect = container.getBoundingClientRect();
+    const containerMidpoint = containerRect.top + containerRect.height / 2;
+
+    let bestPage: number | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (const element of pageElements) {
+      const pageAttr = Number(element.dataset.pageNumber);
+      if (!Number.isFinite(pageAttr)) continue;
+
+      const rect = element.getBoundingClientRect();
+      const pageMidpoint = rect.top + rect.height / 2;
+      const distance = Math.abs(pageMidpoint - containerMidpoint);
+
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestPage = pageAttr;
+      }
+    }
+
+    return bestPage;
+  };
+
   const handleScroll = () => {
     if (scrollTimeoutRef.current) {
       clearTimeout(scrollTimeoutRef.current);
@@ -82,23 +218,17 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
 
     scrollTimeoutRef.current = setTimeout(() => {
       if (containerRef.current && onScrollChange) {
-        const scrollTop = containerRef.current.scrollTop;
-        const scrollHeight = containerRef.current.scrollHeight;
         if (numPages <= 0) return;
 
-        // Calculate which page is visible
-        const pageHeight = scrollHeight / numPages;
-        const currentPage = Math.min(
-          Math.ceil(scrollTop / pageHeight) + 1,
-          numPages
-        );
+        const currentPage = resolveVisiblePage();
 
-        if (currentPage !== pageNumber) {
+        if (currentPage && currentPage !== pageNumber) {
           setPageNumber(currentPage);
           onPageChange?.(currentPage);
         }
 
-        onScrollChange(scrollTop, scrollHeight);
+        const metrics = resolveReportedScrollMetrics(containerRef.current);
+        onScrollChange(metrics.scrollTop, metrics.scrollHeight);
       }
     }, 100);
   };
@@ -130,6 +260,9 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
       scrollToPage(clamped, 'smooth');
     }, 50);
   };
+
+  const fittedPageWidth =
+    containerWidth > 0 ? Math.max(240, Math.floor(Math.max(containerWidth - 32, 240) * scale)) : undefined;
 
   if (error) {
     return (
@@ -237,16 +370,16 @@ export function PDFViewer({ filePath, onPageChange, onScrollChange }: PDFViewerP
           }}
           className="w-full flex flex-col items-center pt-3 pb-0"
         >
-          {Array.from({ length: numPages }, (_, i) => (
+          {visiblePages.map((page) => (
             <div
-              key={i}
-              data-page-number={i + 1}
+              key={page}
+              data-page-number={page}
               className="mb-3 last:mb-0 bg-theme-bg border border-theme-border/20 paper-divider shadow-[0_3px_12px_rgba(16,16,16,0.12)]"
               style={{ scrollMarginTop: '8px', transform: `rotate(${rotation}deg)`, transformOrigin: 'center center' }}
             >
               <Page
-                pageNumber={i + 1}
-                scale={scale}
+                pageNumber={page}
+                width={fittedPageWidth}
                 onLoad={onPageLoaded}
                 renderTextLayer={true}
                 renderAnnotationLayer={true}

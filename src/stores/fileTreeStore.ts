@@ -16,6 +16,8 @@ function mapBackendNode(node: any): FileNode {
   };
 }
 
+type SessionLocationMap = Record<string, string | null | undefined>;
+
 function findFileInTree(nodes: FileNode[], id: string): FileNode | null {
   for (const node of nodes) {
     if (node.id === id) return node;
@@ -27,9 +29,106 @@ function findFileInTree(nodes: FileNode[], id: string): FileNode | null {
   return null;
 }
 
+function stripSessionNodes(nodes: FileNode[]): FileNode[] {
+  return nodes
+    .filter((node) => node.type !== 'session')
+    .map((node) => ({
+      ...node,
+      children: node.children ? stripSessionNodes(node.children) : [],
+    }));
+}
+
+function collectFolderIds(nodes: FileNode[], folderIds = new Set<string>()): Set<string> {
+  for (const node of nodes) {
+    if (node.type === 'folder') {
+      folderIds.add(node.id);
+      if (node.children?.length) {
+        collectFolderIds(node.children, folderIds);
+      }
+    }
+  }
+  return folderIds;
+}
+
+function normalizeSessionLocations(
+  locations: SessionLocationMap | undefined,
+  baseTree: FileNode[],
+  sessions: FileNode[]
+): SessionLocationMap {
+  const validFolders = collectFolderIds(baseTree);
+  const normalized: SessionLocationMap = {};
+
+  for (const session of sessions) {
+    const parentId = locations?.[session.id];
+    normalized[session.id] = parentId && validFolders.has(parentId) ? parentId : null;
+  }
+
+  return normalized;
+}
+
+function insertNodeIntoTree(nodes: FileNode[], item: FileNode, parentId?: string | null): FileNode[] {
+  if (!parentId) {
+    return [...nodes, item];
+  }
+
+  let inserted = false;
+  const nextNodes = nodes.map((node) => {
+    if (node.id === parentId && node.type === 'folder') {
+      inserted = true;
+      return {
+        ...node,
+        children: [...(node.children || []), item],
+      };
+    }
+
+    if (node.children?.length) {
+      const nextChildren = insertNodeIntoTree(node.children, item, parentId);
+      if (nextChildren !== node.children) {
+        inserted = true;
+        return {
+          ...node,
+          children: nextChildren,
+        };
+      }
+    }
+
+    return node;
+  });
+
+  return inserted ? nextNodes : [...nodes, item];
+}
+
+function buildFileTree(
+  baseTree: FileNode[],
+  sessions: FileNode[],
+  locations: SessionLocationMap | undefined
+): { fileTree: FileNode[]; sessionLocations: SessionLocationMap } {
+  const treeWithoutSessions = stripSessionNodes(baseTree);
+  const sessionLocations = normalizeSessionLocations(locations, treeWithoutSessions, sessions);
+
+  let fileTree = treeWithoutSessions;
+  for (const session of sessions) {
+    fileTree = insertNodeIntoTree(fileTree, { ...session, children: [] }, sessionLocations[session.id]);
+  }
+
+  return { fileTree, sessionLocations };
+}
+
+function findParentId(nodes: FileNode[], searchId: string, parentId?: string): string | undefined {
+  for (const node of nodes) {
+    if (node.id === searchId) return parentId;
+    if (node.children?.length) {
+      const found = findParentId(node.children, searchId, node.id);
+      if (found !== undefined) return found;
+    }
+  }
+  return undefined;
+}
+
 interface FileTreeState {
   fileTree: FileNode[];
   localSessions: FileNode[];
+  sessionLocations: SessionLocationMap;
   loading: boolean;
   toggleFolder: (id: string) => void;
   findFile: (id: string) => FileNode | null;
@@ -52,6 +151,7 @@ export const useFileTreeStore = create<FileTreeState>()(
     (set, get) => ({
       fileTree: [],
       localSessions: [],
+      sessionLocations: {},
       loading: false,
 
       toggleFolder: (id: string) =>
@@ -90,16 +190,31 @@ export const useFileTreeStore = create<FileTreeState>()(
             : [];
 
           const persistedSessions = get().localSessions || [];
-          const mergedSessions: FileNode[] = [...backendSessions];
+          const mergedSessionMap = new Map<string, FileNode>();
+
           for (const session of persistedSessions) {
-            if (!mergedSessions.some((item) => item.id === session.id)) {
-              mergedSessions.push(session);
-            }
+            mergedSessionMap.set(session.id, {
+              id: session.id,
+              name: session.name,
+              type: 'session',
+            });
           }
 
+          for (const session of backendSessions) {
+            mergedSessionMap.set(session.id, {
+              id: session.id,
+              name: session.name,
+              type: 'session',
+            });
+          }
+
+          const mergedSessions: FileNode[] = Array.from(mergedSessionMap.values());
+          const merged = buildFileTree(backendTree, mergedSessions, get().sessionLocations);
+
           set({
-            fileTree: [...backendTree, ...mergedSessions],
+            fileTree: merged.fileTree,
             localSessions: mergedSessions,
+            sessionLocations: merged.sessionLocations,
             loading: false,
           });
         } catch (err) {
@@ -154,9 +269,15 @@ export const useFileTreeStore = create<FileTreeState>()(
           const localSessions = state.localSessions.some((item) => item.id === newSession.id)
             ? state.localSessions.map((item) => (item.id === newSession.id ? newSession : item))
             : [...state.localSessions, newSession];
+          const sessionLocations = {
+            ...state.sessionLocations,
+            [newSession.id]: parentId ?? null,
+          };
+          const merged = buildFileTree(state.fileTree, localSessions, sessionLocations);
           return {
             localSessions,
-            fileTree: [...state.fileTree.filter((item) => item.id !== newSession.id), newSession],
+            sessionLocations: merged.sessionLocations,
+            fileTree: merged.fileTree,
           };
         });
         return newSession.id;
@@ -186,8 +307,18 @@ export const useFileTreeStore = create<FileTreeState>()(
             console.error('Failed to delete session from backend:', err);
           }
           set((state) => ({
-            localSessions: state.localSessions.filter((s) => s.id !== id),
-            fileTree: state.fileTree.filter((node) => node.id !== id),
+            ...(() => {
+              const localSessions = state.localSessions.filter((s) => s.id !== id);
+              const sessionLocations = Object.fromEntries(
+                Object.entries(state.sessionLocations).filter(([sessionId]) => sessionId !== id)
+              );
+              const merged = buildFileTree(state.fileTree, localSessions, sessionLocations);
+              return {
+                localSessions,
+                sessionLocations: merged.sessionLocations,
+                fileTree: merged.fileTree,
+              };
+            })(),
           }));
           try {
             const { useChatStore } = await import('./chatStore');
@@ -246,23 +377,28 @@ export const useFileTreeStore = create<FileTreeState>()(
       ) => {
         const file = get().findFile(fileId);
         if (file?.type === 'session') {
-          // Session nodes are root-level, not movable in file hierarchy.
+          let targetParentId = targetFolderId ?? null;
+          if (siblingId && !targetFolderId) {
+            targetParentId = findParentId(get().fileTree, siblingId) ?? null;
+          }
+
+          set((state) => {
+            const sessionLocations = {
+              ...state.sessionLocations,
+              [fileId]: targetParentId,
+            };
+            const merged = buildFileTree(state.fileTree, state.localSessions, sessionLocations);
+            return {
+              sessionLocations: merged.sessionLocations,
+              fileTree: merged.fileTree,
+            };
+          });
           return;
         }
 
         let targetParentId = targetFolderId;
         if (siblingId && !targetFolderId) {
-          const findParent = (nodes: FileNode[], searchId: string, parentId?: string): string | undefined => {
-            for (const node of nodes) {
-              if (node.id === searchId) return parentId;
-              if (node.children?.length) {
-                const found = findParent(node.children, searchId, node.id);
-                if (found !== undefined) return found;
-              }
-            }
-            return undefined;
-          };
-          targetParentId = findParent(get().fileTree, siblingId);
+          targetParentId = findParentId(get().fileTree, siblingId);
         }
 
         try {
@@ -277,6 +413,7 @@ export const useFileTreeStore = create<FileTreeState>()(
       name: 'file-tree-storage',
       partialize: (state) => ({
         localSessions: state.localSessions,
+        sessionLocations: state.sessionLocations,
       }),
     }
   )

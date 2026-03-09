@@ -48,7 +48,10 @@ describe('useFileStore', () => {
   });
 
   it('uploads and refreshes list', async () => {
-    mockApi.uploadFile.mockResolvedValueOnce({ success: true, data: { file_id: 'f2' } });
+    mockApi.uploadFile.mockResolvedValueOnce({
+      success: true,
+      data: { file_id: 'f2', index_status: { parse_status: 'ready', embedding_status: 'ready' } },
+    });
     mockApi.listFiles.mockResolvedValueOnce({ success: true, data: { files: [{ id: 'f2', name: 'n.md' }] } });
     const file = new File(['hello'], 'n.md', { type: 'text/markdown' });
 
@@ -63,6 +66,27 @@ describe('useFileStore', () => {
     const id = await useFileStore.getState().uploadFile(file);
     expect(id).toBeNull();
     expect(useFileStore.getState().error).toBe('upload failed');
+  });
+
+  it('treats incomplete OCR or embedding as upload failure', async () => {
+    mockApi.uploadFile.mockResolvedValueOnce({
+      success: true,
+      data: {
+        file_id: 'f-incomplete',
+        index_status: {
+          parse_status: 'ready',
+          embedding_status: 'disabled',
+          last_error: 'embedding provider unavailable',
+        },
+      },
+    });
+
+    const file = new File(['hello'], 'n.pdf', { type: 'application/pdf' });
+    const id = await useFileStore.getState().uploadFile(file);
+
+    expect(id).toBeNull();
+    expect(useFileStore.getState().error).toContain('OCR/embedding did not complete');
+    expect(mockApi.listFiles).not.toHaveBeenCalled();
   });
 
   it('caches content and updates file content', async () => {

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 describe('runtimeConfig', () => {
   afterEach(() => {
     delete (window as Window & { __KNOWLEDGE_IDE_CONFIG__?: unknown }).__KNOWLEDGE_IDE_CONFIG__;
+    window.localStorage.removeItem('cognition.runtime.overrides');
     vi.resetModules();
   });
 
@@ -55,5 +56,27 @@ describe('runtimeConfig', () => {
     const mod = await import('../runtime');
     expect(mod.runtimeConfig.apiBaseUrl).toBe('internal-api-host');
     expect(mod.runtimeConfig.wsBaseUrl).toBe('ws://127.0.0.1:8000');
+  });
+
+  it('uses stored overrides for runtime config, model, and request headers', async () => {
+    window.localStorage.setItem(
+      'cognition.runtime.overrides',
+      JSON.stringify({
+        apiBaseUrl: 'http://127.0.0.1:9000/',
+        primary: { apiKey: 'pk-main', baseUrl: 'https://llm.example.com', model: 'kimi-latest' },
+        ocr: { apiKey: 'pk-ocr', baseUrl: 'https://ocr.example.com', model: 'ocr-model' },
+        embedding: { apiKey: 'pk-embed', baseUrl: 'https://embed.example.com', model: 'embed-model' },
+      })
+    );
+
+    const mod = await import('../runtime');
+    expect(mod.getRuntimeConfig().apiBaseUrl).toBe('http://127.0.0.1:9000');
+    expect(mod.getRuntimeConfig().wsBaseUrl).toBe('ws://127.0.0.1:9000');
+    expect(mod.getDefaultChatModel()).toBe('kimi-latest');
+    expect(mod.getRuntimeRequestHeaders()).toMatchObject({
+      'X-Cognition-Primary-Api-Key': 'pk-main',
+      'X-Cognition-Ocr-Model': 'ocr-model',
+      'X-Cognition-Embedding-Base-Url': 'https://embed.example.com',
+    });
   });
 });
