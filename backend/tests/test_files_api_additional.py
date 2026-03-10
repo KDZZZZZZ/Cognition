@@ -63,6 +63,15 @@ def test_files_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert snapshots[2]["old_line"] is None
     assert snapshots[2]["new_line"] == "d"
 
+    inserted_before_similar = files_api._build_diff_line_snapshots(
+        "Intro paragraph.",
+        "Between heading and intro\nIntro paragraph updated.",
+    )
+    assert inserted_before_similar[0]["old_line"] is None
+    assert inserted_before_similar[0]["new_line"] == "Between heading and intro"
+    assert inserted_before_similar[1]["old_line"] == "Intro paragraph."
+    assert inserted_before_similar[1]["new_line"] == "Intro paragraph updated."
+
     line_rows = [
         type("Line", (), {"line_no": 2, "old_line": "B-old", "new_line": "B-new", "decision": LineDecision.REJECTED}),
         type("Line", (), {"line_no": 1, "old_line": "A-old", "new_line": "A-new", "decision": LineDecision.ACCEPTED}),
