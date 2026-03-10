@@ -1,22 +1,15 @@
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkFrontmatter from 'remark-frontmatter';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import type { Content, Parent, Root } from 'mdast';
+import type { Content, Root } from 'mdast';
 import type { DiffRenderRow } from '../diffRows';
+import {
+  classifyMarkdownNode,
+  detectMarkdownCallout,
+  parseMarkdownRoot,
+} from '../markdownDocument';
 import type { DiffBlock, DiffBlockKind, DiffCalloutMeta } from './types';
 import { buildReviewUnits } from './buildReviewUnits';
 
-const processor = unified()
-  .use(remarkParse)
-  .use(remarkFrontmatter, ['yaml', 'toml'])
-  .use(remarkGfm)
-  .use(remarkMath);
-
 function parseRoot(content: string): Root | null {
-  if (!content.trim()) return null;
-  return processor.parse(content) as Root;
+  return parseMarkdownRoot(content);
 }
 
 function reviewTextForRow(row: DiffRenderRow) {
@@ -54,45 +47,21 @@ function pickPrimaryNode(root: Root | null): Content | null {
   return (root.children.find((child) => child.type !== 'definition') || root.children[0]) as Content;
 }
 
-function isTaskListNode(node: Content | null) {
-  return Boolean(
-    node &&
-      node.type === 'list' &&
-      (node as any).children?.some((child: any) => typeof child?.checked === 'boolean')
-  );
-}
-
 function detectCallout(node: Content | null): DiffCalloutMeta | null {
-  if (!node || node.type !== 'blockquote') return null;
-  const firstChild = (node as Parent).children?.[0] as Content | undefined;
-  if (!firstChild || firstChild.type !== 'paragraph') return null;
-  const firstText = ((firstChild as Parent).children?.[0] as any)?.value;
-  if (typeof firstText !== 'string') return null;
-  const [firstLine = ''] = firstText.split('\n');
-  const match = firstLine.match(/^\[!(\w+)\]\s*(.*)$/);
-  if (!match) return null;
-  return {
-    kind: match[1].toLowerCase(),
-    title: match[2]?.trim() || null,
-  };
+  return detectMarkdownCallout(node);
 }
 
-function classifyNode(node: Content | null): DiffBlockKind {
+function classifyNode(node: Content | null, markdown: string): DiffBlockKind {
   if (!node) return 'blank';
-  if (node.type === 'heading') return 'heading';
-  if (node.type === 'paragraph') return 'paragraph';
-  if (node.type === 'blockquote') return detectCallout(node) ? 'callout' : 'blockquote';
-  if (node.type === 'list') return isTaskListNode(node) ? 'task_list' : 'list';
-  if (node.type === 'code') {
-    return (node as any).lang === 'mermaid' ? 'mermaid' : 'code';
+  if (node.type === 'code' && (node as any).lang === 'mermaid') {
+    return 'mermaid';
   }
-  if (node.type === 'math') return 'math';
-  if (node.type === 'table') return 'table';
-  if (node.type === 'html') return 'html';
-  if (node.type === 'yaml' || (node as any).type === 'toml') return 'frontmatter';
-  if (node.type === 'footnoteDefinition') return 'footnote';
-  if (node.type === 'thematicBreak') return 'thematic_break';
-  return 'unknown';
+
+  const kind = classifyMarkdownNode(node, markdown);
+  if (kind === 'image') {
+    return 'paragraph';
+  }
+  return kind as DiffBlockKind;
 }
 
 function isStructuralChange(oldNode: Content | null, newNode: Content | null) {
@@ -144,7 +113,7 @@ function createBlockFromRows(
   const oldNode = pickPrimaryNode(oldRoot);
   const newNode = pickPrimaryNode(newRoot);
   const effectiveNode = newNode || oldNode || preferredNode;
-  const kind = classifyNode(effectiveNode);
+  const kind = classifyNode(effectiveNode, newText || oldText);
 
   return {
     id,

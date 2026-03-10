@@ -697,6 +697,8 @@ export function FileTree() {
     </div>
   ) : null;
 
+  const uploadProgressCard = false ? uploadProgress : null;
+
   return (
     <>
       <div
@@ -739,35 +741,35 @@ export function FileTree() {
           </button>
         </div>
 
-        {false && uploadProgress && (
+        {uploadProgressCard ? (
           <div
             data-testid="upload-progress-card"
             className="mx-4 mb-3 overflow-hidden rounded-[26px] border border-sky-200/75 bg-[linear-gradient(135deg,rgba(239,246,255,0.98),rgba(224,242,254,0.92)_52%,rgba(245,243,255,0.94))] px-4 py-4 shadow-[0_18px_40px_rgba(14,116,144,0.12)]"
           >
             <div className="flex items-center gap-4">
-              <UploadProgressRing progress={uploadProgress.overallProgress ?? 0} />
+              <UploadProgressRing progress={uploadProgressCard.overallProgress ?? 0} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-sky-700/75">
-                      {phaseLabel(uploadProgress.phase)}
+                      {phaseLabel(uploadProgressCard.phase)}
                     </div>
                     <div className="mt-1 truncate text-sm font-semibold text-slate-950">
-                      {uploadProgress.currentFileName}
+                      {uploadProgressCard.currentFileName}
                     </div>
                     <div className="mt-1 text-[11px] text-slate-600">
-                      File {uploadProgress.currentFileIndex}/{uploadProgress.total}
-                      {uploadProgress.currentFilePages
-                        ? ` · ${uploadProgress.currentFilePages} pages`
-                        : ` · ${(uploadProgress.currentFileSizeMb ?? 0).toFixed(1)} MB`}
+                      File {uploadProgressCard.currentFileIndex}/{uploadProgressCard.total}
+                      {uploadProgressCard.currentFilePages
+                        ? ` · ${uploadProgressCard.currentFilePages} pages`
+                        : ` · ${(uploadProgressCard.currentFileSizeMb ?? 0).toFixed(1)} MB`}
                     </div>
                   </div>
                   <div className="text-right">
                     <div className="text-lg font-semibold tracking-[-0.04em] text-slate-950">
-                      {uploadProgress.currentFileProgress ?? 0}%
+                      {uploadProgressCard.currentFileProgress ?? 0}%
                     </div>
                     <div className="text-[11px] text-slate-500">
-                      {uploadProgress.completed ?? 0} completed
+                      {uploadProgressCard.completed ?? 0} completed
                     </div>
                   </div>
                 </div>
@@ -775,22 +777,22 @@ export function FileTree() {
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/70 ring-1 ring-sky-200/60">
                   <div
                     className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e_0%,#2563eb_56%,#7c3aed_100%)] transition-[width] duration-200 ease-out"
-                    style={{ width: `${uploadProgress.currentFileProgress ?? 0}%` }}
+                    style={{ width: `${uploadProgressCard.currentFileProgress ?? 0}%` }}
                   />
                 </div>
 
                 <div className="mt-3 flex items-center justify-between gap-3 text-[11px] text-slate-600">
-                  <span>{formatDuration(uploadProgress.elapsedMs)} elapsed</span>
+                  <span>{formatDuration(uploadProgressCard.elapsedMs)} elapsed</span>
                   <span>
-                    {uploadProgress.estimateRemainingMs === 0
+                    {uploadProgressCard.estimateRemainingMs === 0
                       ? 'index ready'
-                      : `~${formatDuration(uploadProgress.estimateRemainingMs)} remaining`}
+                      : `~${formatDuration(uploadProgressCard.estimateRemainingMs)} remaining`}
                   </span>
                 </div>
               </div>
             </div>
           </div>
-        )}
+        ) : null}
 
         {uploadError && (
           <div

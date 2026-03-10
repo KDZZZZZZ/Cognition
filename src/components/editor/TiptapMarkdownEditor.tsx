@@ -3,12 +3,19 @@ import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
+import { TaskList, TaskItem } from '@tiptap/extension-list';
+import { Table } from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableCell from '@tiptap/extension-table-cell';
+import TableHeader from '@tiptap/extension-table-header';
 import { MathExtension } from '@aarkue/tiptap-math-extension';
 import { Markdown } from 'tiptap-markdown';
 import { useEffect, useRef, useState, useMemo, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { SlashCommands, slashCommandsSuggestion } from './SlashCommands';
 import { InlineMathEnterFix } from './extensions/InlineMathEnterFix';
+import { InlineDiffDecorations } from './extensions/InlineDiffDecorations';
 import { InlineMathMarkdownStorage } from './extensions/InlineMathMarkdownStorage';
+import { MarkdownTokenVisibility } from './extensions/MarkdownTokenVisibility';
 import { MathSyntaxBridge, createBridgeTransaction } from './extensions/MathSyntaxBridge';
 import {
   normalizeCopiedSelectionMarkdown,
@@ -31,10 +38,12 @@ export interface TiptapMarkdownEditorProps {
   onChange?: (markdown: string) => void;
   onBlur?: () => void;
   placeholder?: string;
+  showPlaceholderWhenReadonly?: boolean;
   editable?: boolean;
   className?: string;
   chrome?: 'document' | 'inline';
   autofocus?: boolean;
+  inlineDiffBaseMarkdown?: string | null;
   availableSessions?: { id: string; name: string }[];
   defaultSessionId?: string;
   sourceFile?: { id: string; name: string };
@@ -115,10 +124,12 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
       onChange,
       onBlur,
       placeholder = 'Type / for commands, or start writing...',
+      showPlaceholderWhenReadonly = false,
       editable = true,
       className = '',
       chrome = 'document',
       autofocus = false,
+      inlineDiffBaseMarkdown = null,
       availableSessions = [],
       defaultSessionId,
       sourceFile,
@@ -282,6 +293,7 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
           codeBlock: {
             languageClassPrefix: 'language-',
           },
+          link: false,
         }),
         Image.configure({
           inline: false,
@@ -300,6 +312,16 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
             target: '_blank',
           },
         }),
+        TaskList,
+        TaskItem.configure({
+          nested: true,
+        }),
+        Table.configure({
+          resizable: false,
+        }),
+        TableRow,
+        TableHeader,
+        TableCell,
 
         // 数学公式支持（手动输入 $...$ 和 $$...$$）
         MathExtension.configure({
@@ -324,6 +346,7 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
           placeholder,
           emptyEditorClass: 'is-editor-empty',
           emptyNodeClass: 'is-empty',
+          showOnlyWhenEditable: !showPlaceholderWhenReadonly,
         }),
 
         // Stage 2: Markdown 转换层
@@ -339,6 +362,11 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
         }),
         InlineMathMarkdownStorage,
         MathSyntaxBridge,
+        InlineDiffDecorations.configure({
+          enabled: Boolean(inlineDiffBaseMarkdown?.trim()),
+          baseMarkdown: inlineDiffBaseMarkdown || '',
+        }),
+        MarkdownTokenVisibility,
 
         // Stage 4: 斜杠命令
         SlashCommands.configure({
@@ -457,7 +485,7 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
           return false;
         },
       },
-    });
+    }, [autofocus, chrome, className, editable, inlineDiffBaseMarkdown, placeholder]);
 
     // 暴露编辑器方法给父组件
     useImperativeHandle(ref, () => ({
@@ -478,6 +506,17 @@ export const TiptapMarkdownEditor = forwardRef<TiptapMarkdownEditorRef, TiptapMa
     useEffect(() => {
       editorRef.current = editor;
     }, [editor]);
+
+    useEffect(() => {
+      if (!editor || !editable || !autofocus) return;
+
+      const frame = window.requestAnimationFrame(() => {
+        if (editor.isDestroyed) return;
+        editor.commands.focus('end');
+      });
+
+      return () => window.cancelAnimationFrame(frame);
+    }, [autofocus, editable, editor]);
 
     // 当 content prop 变化时更新编辑器
     useEffect(() => {

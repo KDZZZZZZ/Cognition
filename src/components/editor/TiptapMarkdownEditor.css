@@ -23,6 +23,7 @@
   color: var(--theme-text);
   outline: none;
   text-wrap: pretty;
+  position: relative;
 }
 
 .tiptap-markdown-editor-inline {
@@ -31,6 +32,89 @@
   padding: 0;
   font-size: inherit;
   line-height: inherit;
+}
+
+.tiptap-markdown-editor-inline h1,
+.tiptap-markdown-editor-inline h2,
+.tiptap-markdown-editor-inline h3 {
+  letter-spacing: 0.02em;
+  color: var(--theme-text);
+}
+
+.tiptap-markdown-editor-inline h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 2.25rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.tiptap-markdown-editor-inline h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.75rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.tiptap-markdown-editor-inline h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.75rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.tiptap-markdown-editor-inline blockquote {
+  margin: 0.5rem 0;
+  padding: 0.1rem 0 0.1rem 1rem;
+  border-left: 3px solid var(--theme-border-soft);
+  color: color-mix(in srgb, var(--theme-text) 70%, transparent);
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+}
+
+.tiptap-markdown-editor-inline ul,
+.tiptap-markdown-editor-inline ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.tiptap-markdown-editor-inline li {
+  margin: 0.25rem 0;
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+}
+
+.tiptap-markdown-editor-inline > p:last-child:not(.is-editor-empty):has(> br.ProseMirror-trailingBreak) {
+  display: block;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  line-height: 0;
+  font-size: 0;
+  overflow: hidden;
+}
+
+.tiptap-markdown-editor-inline > p.is-editor-empty {
+  min-height: 1.75rem;
+}
+
+.tiptap-markdown-editor-inline > p.is-editor-empty:first-child,
+.tiptap-markdown-editor-inline > p.is-editor-empty:last-child {
+  min-height: 1.75rem;
+  margin: 0;
+}
+
+.tiptap-markdown-editor-inline > h1:has(+ p:last-child),
+.tiptap-markdown-editor-inline > h2:has(+ p:last-child),
+.tiptap-markdown-editor-inline > h3:has(+ p:last-child),
+.tiptap-markdown-editor-inline > h4:has(+ p:last-child),
+.tiptap-markdown-editor-inline > h5:has(+ p:last-child),
+.tiptap-markdown-editor-inline > h6:has(+ p:last-child),
+.tiptap-markdown-editor-inline > blockquote:has(+ p:last-child),
+.tiptap-markdown-editor-inline > ul:has(+ p:last-child),
+.tiptap-markdown-editor-inline > ol:has(+ p:last-child),
+.tiptap-markdown-editor-inline > pre:has(+ p:last-child) {
+  margin-bottom: 0;
 }
 
 .tiptap-markdown-editor-inline h1:first-child,
@@ -200,6 +284,35 @@
   font-weight: 650;
 }
 
+.tiptap-markdown-editor .markdown-token-active {
+  border-radius: 0.22rem;
+  background: color-mix(in srgb, var(--theme-selection-bg) 20%, transparent);
+}
+
+.tiptap-markdown-editor .markdown-marker-widget {
+  display: inline-flex;
+  align-items: center;
+  color: color-mix(in srgb, var(--theme-text) 48%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.74em;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+  white-space: pre;
+}
+
+.tiptap-markdown-editor .markdown-marker-widget[data-side='open'] {
+  margin-right: 0.08rem;
+}
+
+.tiptap-markdown-editor .markdown-marker-widget[data-side='close'] {
+  margin-left: 0.08rem;
+}
+
+.tiptap-markdown-editor .markdown-marker-widget[data-kind='link'] {
+  color: color-mix(in srgb, var(--theme-text) 58%, transparent);
+}
+
 .tiptap-markdown-editor s {
   opacity: 0.65;
 }
@@ -219,6 +332,8 @@
   opacity: 0.38;
   pointer-events: none;
   position: absolute;
+  left: 0;
+  top: 0;
 }
 
 .tiptap-markdown-editor ::selection {

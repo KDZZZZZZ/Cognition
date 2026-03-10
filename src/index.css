@@ -179,6 +179,62 @@ samp {
   box-shadow: 0 8px 16px rgba(16, 16, 16, 0.08);
 }
 
+.hljs {
+  display: block;
+  color: color-mix(in srgb, var(--theme-text) 92%, #102a43 8%);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: color-mix(in srgb, var(--theme-text) 42%, transparent);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-link,
+.hljs-type {
+  color: #8f2d18;
+  font-weight: 600;
+}
+
+.hljs-string,
+.hljs-attr,
+.hljs-attribute,
+.hljs-regexp,
+.hljs-template-tag,
+.hljs-template-variable {
+  color: #0f6b5c;
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-variable,
+.hljs-variable.constant_,
+.hljs-meta,
+.hljs-meta .hljs-keyword {
+  color: #7b4f16;
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-function .hljs-title,
+.hljs-built_in,
+.hljs-property {
+  color: #184c7d;
+}
+
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #7f1d4e;
+}
+
 .accent-dot {
   width: 7px;
   height: 7px;

@@ -2,6 +2,15 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { RenderedDiffViewer } from '../RenderedDiffViewer';
 
+vi.mock('../../ui/MermaidDiagram', () => ({
+  MermaidDiagram: ({ chart, title }: { chart: string; title?: string | null }) => (
+    <div data-testid="mock-mermaid-diagram">
+      <div>{title || 'mermaid'}</div>
+      <div>{chart}</div>
+    </div>
+  ),
+}));
+
 describe('RenderedDiffViewer', () => {
   it('renders pending diff as unified block cards while keeping line actions', () => {
     const onApplyLineDecision = vi.fn();
@@ -128,6 +137,33 @@ describe('RenderedDiffViewer', () => {
     expect(container.querySelector('pre')).not.toBeNull();
     expect(container.textContent).toContain('const answer = 43;');
     expect(container.textContent).not.toContain('```');
+    expect(container.querySelector('.hljs-keyword')?.textContent).toBe('const');
+    expect(Array.from(container.querySelectorAll('.hljs-number')).some((element) => element.textContent === '43')).toBe(true);
+  });
+
+  it('renders mermaid diffs with a diagram preview while keeping code-line review controls', () => {
+    const onApplyLineDecision = vi.fn();
+
+    render(
+      <RenderedDiffViewer
+        oldContent={'```mermaid\ngraph TD\n  A-->B\n```'}
+        newContent={'```mermaid\ngraph TD\n  A-->C\n```'}
+        mode="split"
+        pendingLines={[
+          { id: 'm-line-1', line_no: 1, old_line: '```mermaid', new_line: '```mermaid', decision: 'accepted' },
+          { id: 'm-line-2', line_no: 2, old_line: 'graph TD', new_line: 'graph TD', decision: 'accepted' },
+          { id: 'm-line-3', line_no: 3, old_line: '  A-->B', new_line: '  A-->C', decision: 'pending' },
+          { id: 'm-line-4', line_no: 4, old_line: '```', new_line: '```', decision: 'accepted' },
+        ]}
+        onApplyLineDecision={onApplyLineDecision}
+      />
+    );
+
+    const diagram = screen.getByTestId('mock-mermaid-diagram');
+    expect(diagram).toBeInTheDocument();
+    expect(diagram.textContent).toContain('graph TD');
+    expect(diagram.textContent).toContain('A-->C');
+    expect(screen.getByLabelText('Accept line 3')).toBeInTheDocument();
   });
 
   it('renders callouts as dedicated cards instead of raw blockquote markers', () => {

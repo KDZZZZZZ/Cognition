@@ -1,6 +1,7 @@
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
 import rehypeRaw from 'rehype-raw';
 import { Fragment } from 'react';
@@ -19,6 +20,7 @@ interface MarkdownSegment {
   content: string;
   calloutKind?: string;
   calloutTitle?: string;
+  calloutBody?: string;
 }
 
 function extractFrontmatter(content: string) {
@@ -86,11 +88,8 @@ function splitMarkdownSegments(content: string): MarkdownSegment[] {
     flushMarkdown();
 
     const calloutKind = calloutMatch[1].toLowerCase();
-    const calloutTitle = formatCalloutTitle(calloutKind);
+    const calloutTitle = calloutMatch[2]?.trim() || '';
     const calloutLines: string[] = [];
-    if (calloutMatch[2]?.trim()) {
-      calloutLines.push(calloutMatch[2].trim());
-    }
 
     let cursor = index + 1;
     while (cursor < lines.length) {
@@ -104,7 +103,8 @@ function splitMarkdownSegments(content: string): MarkdownSegment[] {
       kind: 'callout',
       content: calloutLines.join('\n').trim(),
       calloutKind,
-      calloutTitle,
+      calloutTitle: calloutTitle || formatCalloutTitle(calloutKind),
+      calloutBody: calloutLines.join('\n').trim(),
     });
 
     index = cursor - 1;
@@ -118,11 +118,12 @@ export function MarkdownContent({ content, className, variant = 'default', hideF
   const isDiffVariant = variant === 'diff';
   const { entries, body } = extractFrontmatter(content);
   const segments = splitMarkdownSegments(body);
+  const rehypePlugins = [rehypeRaw, rehypeKatex, [rehypeHighlight, { ignoreMissing: true }]] as const;
 
   const renderMarkdownBody = (markdown: string) => (
     <ReactMarkdown
       remarkPlugins={[remarkMath, remarkGfm]}
-      rehypePlugins={[rehypeRaw, rehypeKatex]}
+      rehypePlugins={rehypePlugins as any}
       components={{
         pre: ({ node, ...props }) => (
           <pre
@@ -195,15 +196,15 @@ export function MarkdownContent({ content, className, variant = 'default', hideF
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr>
-                <th className="border border-theme-border/20 px-2 py-1 text-left font-semibold">Key</th>
-                <th className="border border-theme-border/20 px-2 py-1 text-left font-semibold">Value</th>
+                <th className="border border-theme-border/20 px-2 py-1.5 text-left font-medium text-theme-text/56">Key</th>
+                <th className="border border-theme-border/20 px-2 py-1.5 text-left font-medium text-theme-text/56">Value</th>
               </tr>
             </thead>
             <tbody>
               {entries.map(([entryKey, entryValue]) => (
                 <tr key={entryKey}>
-                  <td className="border border-theme-border/20 px-2 py-1 font-mono text-xs">{entryKey}</td>
-                  <td className="border border-theme-border/20 px-2 py-1">{entryValue}</td>
+                  <td className="border border-theme-border/20 px-2 py-1.5 align-top">{entryKey}</td>
+                  <td className="border border-theme-border/20 px-2 py-1.5 align-top">{entryValue}</td>
                 </tr>
               ))}
             </tbody>
@@ -214,12 +215,19 @@ export function MarkdownContent({ content, className, variant = 'default', hideF
         segments.map((segment, index) => (
           <Fragment key={`${segment.kind}-${index}`}>
             {segment.kind === 'callout' ? (
-              <aside className={`my-4 rounded-lg border px-3 py-2 ${calloutTone(segment.calloutKind || 'note')}`}>
-                <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em]">
-                  {segment.calloutTitle}
+              <aside className={`my-4 rounded-xl border px-3 py-2 ${calloutTone(segment.calloutKind || 'note')}`}>
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-current/72">
+                    {formatCalloutTitle(segment.calloutKind || 'note')}
+                  </div>
+                  {segment.calloutTitle && segment.calloutTitle !== formatCalloutTitle(segment.calloutKind || 'note') ? (
+                    <div className="min-w-0 text-sm font-semibold leading-6 text-current">
+                      {segment.calloutTitle}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex flex-col gap-1">
-                  {segment.content.trim().length > 0 ? renderMarkdownBody(segment.content) : null}
+                  {segment.calloutBody?.trim().length ? renderMarkdownBody(segment.calloutBody) : null}
                 </div>
               </aside>
             ) : (

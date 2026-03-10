@@ -21,12 +21,14 @@ import type {
 import {
   renderKatexToHtml,
   markdownCodeBlockClassName,
+  highlightCodeToHtml,
   diffInlineDeleteClassName,
   diffInlineInsertClassName,
   diffStructuralClassName,
   diffBlockDeleteClassName,
   diffBlockInsertClassName,
 } from '../../ui/markdownShared';
+import { MermaidDiagram } from '../../ui/MermaidDiagram';
 import { MarkdownContent } from '../../ui/MarkdownContent';
 import type { DiffRenderRow } from '../diffRows';
 import type { DiffBlock, DiffCalloutMeta, ReviewUnit } from './types';
@@ -92,6 +94,11 @@ function escapeHtml(value: string) {
 
 function escapeHtmlAttribute(value: string) {
   return escapeHtml(value).replace(/"/g, '&quot;');
+}
+
+function renderHighlightedCodeLine(value: string, language?: string | null) {
+  const html = highlightCodeToHtml(value, language);
+  return <span dangerouslySetInnerHTML={{ __html: html || '&nbsp;' }} />;
 }
 
 function stripHtmlTags(value: string) {
@@ -995,10 +1002,22 @@ function renderCodeBlock(oldNode: any, newNode: any, key: string, langLabel?: st
     rows.push(...part.value.map((line, lineIndex) => <div key={`${key}-ins-${index}-${lineIndex}`} className="bg-emerald-500/10 px-3 py-0.5">{line || ' '}</div>));
   }
 
-  return (
+  const body = (
     <div key={key} className={`${markdownCodeBlockClassName} bg-theme-bg/80`}>
       {langLabel ? <div className="border-b border-theme-border/10 px-3 py-1 text-[10px] uppercase tracking-[0.16em] text-theme-text/50">{langLabel}</div> : null}
       <pre className="m-0 overflow-x-auto bg-transparent py-2 text-xs text-theme-text"><code>{rows}</code></pre>
+    </div>
+  );
+
+  if (String(langLabel || '').trim().toLowerCase() !== 'mermaid') {
+    return body;
+  }
+
+  const chart = String(newNode?.value || oldNode?.value || '');
+  return (
+    <div key={key} className="space-y-2">
+      <MermaidDiagram chart={chart} title="Diagram preview" />
+      {body}
     </div>
   );
 }
@@ -1580,9 +1599,12 @@ function renderCodeBlockUnits(
   onApplyLineDecision?: (lineId: string | string[], decision: ReviewDecision) => void | Promise<void>
 ) {
   const rawLines = block.rows.map((row) => row.newText ?? row.oldText ?? '');
+  const isMermaid = block.kind === 'mermaid';
+  const previewNode = primaryNode(block.newRoot) || primaryNode(block.oldRoot);
   const fencePattern = /^\s*(`{3,}|~{3,})(.*)$/;
   const firstFence = rawLines[0]?.match(fencePattern);
   const lastFence = rawLines.length > 1 ? rawLines[rawLines.length - 1]?.match(fencePattern) : null;
+  const langLabel = String((previewNode as any)?.lang || firstFence?.[2]?.trim().split(/\s+/)[0] || '').trim() || null;
   const startIndex = firstFence && block.rows[0]?.status === 'equal' ? 1 : 0;
   const endIndex =
     lastFence && block.rows[block.rows.length - 1]?.status === 'equal'
@@ -1606,6 +1628,13 @@ function renderCodeBlockUnits(
 
   return (
     <div data-testid="diff-review-unit" data-review-unit="code" className="min-w-0">
+      {isMermaid ? (
+        <MermaidDiagram
+          chart={String((previewNode as any)?.value || '')}
+          title="Diagram preview"
+          className="mb-2"
+        />
+      ) : null}
       <div className={markdownCodeBlockClassName}>
         <pre className="m-0 overflow-x-auto bg-transparent py-2 text-xs text-theme-text">
           <code>
@@ -1671,15 +1700,25 @@ function renderCodeBlockUnits(
                       </div>
                     ) : row.status === 'modify' ? (
                       <div className="space-y-px">
-                        <div className="bg-rose-500/10 px-2 py-0.5 line-through decoration-rose-700/80">{row.oldText || ' '}</div>
-                        <div className="bg-emerald-500/10 px-2 py-0.5">{row.newText || ' '}</div>
+                        <div className="bg-rose-500/10 px-2 py-0.5 line-through decoration-rose-700/80">
+                          {renderHighlightedCodeLine(row.oldText || ' ', langLabel)}
+                        </div>
+                        <div className="bg-emerald-500/10 px-2 py-0.5">
+                          {renderHighlightedCodeLine(row.newText || ' ', langLabel)}
+                        </div>
                       </div>
                     ) : row.status === 'remove' ? (
-                      <div className="bg-rose-500/10 px-2 py-0.5 line-through decoration-rose-700/80">{row.oldText || ' '}</div>
+                      <div className="bg-rose-500/10 px-2 py-0.5 line-through decoration-rose-700/80">
+                        {renderHighlightedCodeLine(row.oldText || ' ', langLabel)}
+                      </div>
                     ) : row.status === 'add' ? (
-                      <div className="bg-emerald-500/10 px-2 py-0.5">{row.newText || ' '}</div>
+                      <div className="bg-emerald-500/10 px-2 py-0.5">
+                        {renderHighlightedCodeLine(row.newText || ' ', langLabel)}
+                      </div>
                     ) : (
-                      <div className="px-2 py-0.5">{row.newText || row.oldText || ' '}</div>
+                      <div className="px-2 py-0.5">
+                        {renderHighlightedCodeLine(row.newText || row.oldText || ' ', langLabel)}
+                      </div>
                     )}
                   </div>
                 </div>

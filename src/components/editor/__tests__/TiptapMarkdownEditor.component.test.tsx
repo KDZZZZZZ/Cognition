@@ -137,6 +137,10 @@ vi.mock('../extensions/InlineMathMarkdownStorage', () => ({
   InlineMathMarkdownStorage: { name: 'inline-math-markdown-storage' },
 }));
 
+vi.mock('../extensions/MarkdownTokenVisibility', () => ({
+  MarkdownTokenVisibility: { name: 'markdown-token-visibility' },
+}));
+
 vi.mock('../extensions/MathSyntaxBridge', () => ({
   MathSyntaxBridge: { name: 'math-syntax-bridge' },
   createBridgeTransaction: vi.fn(() => null),
@@ -172,6 +176,7 @@ describe('TiptapMarkdownEditor component', () => {
     render(<TiptapMarkdownEditor ref={ref} content="initial markdown" onChange={onChange} onBlur={onBlur} />);
 
     expect(screen.getByTestId('editor-content')).toBeInTheDocument();
+    expect(m.lastConfig.extensions.some((extension: { name?: string }) => extension?.name === 'markdown-token-visibility')).toBe(true);
 
     act(() => {
       m.lastConfig.editorProps.handleDOMEvents.keydown(null, new KeyboardEvent('keydown', { key: 'a' }));
